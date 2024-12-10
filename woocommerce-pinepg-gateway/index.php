@@ -4,10 +4,10 @@ Plugin Name: Pay Securely with Pine Labs
 Plugin URI: https://github.com/plural-pinelabs/woocommerce-plugin/
 Description: A WooCommerce payment gateway integration for Pine Labs.
 Version: 1.0.0
+License: GPLv2 or later
+License URI: https://www.gnu.org/licenses/gpl-2.0.html
 Author: anoop.pandey@pinelabs.com
 Author URI: https://www.pinelabs.com/
-Text Domain: pay-securely-pine-labs
-Domain Path: /i18n/languages/
 */
 
 add_filter( 'woocommerce_payment_gateways', 'pinepg_add_gateway_class' );
@@ -18,6 +18,9 @@ function pinepg_add_gateway_class( $gateways ) {
 
 add_action( 'plugins_loaded', 'pinepg_init_gateway_class' );
 function pinepg_init_gateway_class() {
+
+
+    load_plugin_textdomain('wc-edgepg', false, dirname( plugin_basename( __FILE__ ) ) . '/languages');
     class WC_PinePg extends WC_Payment_Gateway {
 
         public function __construct() {
@@ -173,7 +176,7 @@ function pinepg_init_gateway_class() {
             ? 'https://api.pluralpay.in/api/pay/v1/refunds/' . $edge_order_id
             : 'https://pluraluat.v2.pinepg.in/api/pay/v1/refunds/' . $edge_order_id;
     
-        $body = json_encode( array(
+        $body = wp_json_encode( array(
             'merchant_order_reference' => uniqid(),
             'refund_amount' => array(
                 'value' => (int) $amount * 100, // Assuming WooCommerce amount is in decimal
@@ -243,7 +246,7 @@ function pinepg_init_gateway_class() {
 
 
 
-                error_log('Cookie set: ' . $cookie_name . ' = ' . $cookie_value);
+                //error_log('Cookie set: ' . $cookie_name . ' = ' . $cookie_value);
                 
                 return array(
                     'result'   => 'success',
@@ -274,8 +277,8 @@ function pinepg_init_gateway_class() {
         }
     
 
-            $body = json_encode( array(
-                'merchant_order_reference' => $order->get_order_number() . '_' . date("ymdHis"),
+            $body = wp_json_encode( array(
+                'merchant_order_reference' => $order->get_order_number() . '_' . gmdate("ymdHis"),
                 'order_amount' => array(
                     'value' => (int) $order->get_total() * 100,
                     'currency' => 'INR',
@@ -324,15 +327,20 @@ function pinepg_init_gateway_class() {
         }
 
         public function handle_pinepg_callback() {
-            // Get callback data
-            $callback_data = $_POST;
+            
         
-            // Log incoming callback data for debugging
-            plugin_log(__LINE__ . ' Pinelab callback data: ' . json_encode($callback_data));
-        
-            // Extract the order ID from the callback data
-            $order_id_from_pg = isset($callback_data['order_id']) ? $callback_data['order_id'] : '';
-        
+           
+                // Verify nonce before processing data
+                if (sanitize_text_field(wp_unslash(isset( $_POST['order_id'] )))) {
+                    
+                    // Sanitize the order_id
+                    $order_id_from_pg = sanitize_text_field( wp_unslash( $_POST['order_id'] ) );
+                    
+                    // Process the order ID here
+                }
+            
+            
+
             if ($order_id_from_pg != '') {
                 // Construct the cookie name
                 $cookie_name = 'order_' . $order_id_from_pg;
@@ -342,7 +350,7 @@ function pinepg_init_gateway_class() {
                 $woocommerce_order_id = 'woocommerce_' . $order_id_from_pg;
 
                 if (isset($_COOKIE[$woocommerce_order_id])) {
-                    $woocommerce_order_id = $_COOKIE[$woocommerce_order_id];
+                    $woocommerce_order_id = sanitize_text_field(wp_unslash($_COOKIE[$woocommerce_order_id]));
                     $parts = explode('_', $woocommerce_order_id);
                     $actual_order_id = (int)$parts[0];
                 }
@@ -353,24 +361,25 @@ function pinepg_init_gateway_class() {
         
                 // Check if the cookie exists
                 if (isset($_COOKIE[$cookie_name])) {
-                    $token = $_COOKIE[$cookie_name];
+                    $token = sanitize_text_field(wp_unslash($_COOKIE[$cookie_name]));
                     plugin_log(__LINE__ . ' Token from cookie: ' . $token);
         
                     // Call the API to get the status of the payment
                     $status_data = $this->call_enquiry_api($token);
         
                     // Log the status data received from the API
-                    plugin_log(__LINE__ . ' Payment status data: ' . json_encode($status_data));
+                    plugin_log(__LINE__ . ' Payment status data: ' . wp_json_encode($status_data));
         
                     // Check payment status
                     if ($status_data['status'] === 'FAILED') {
                         // Payment failed, add an error notice
-                        wc_add_notice(__('Payment failed. Please try again.', 'woocommerce'), 'error');
+                        wc_add_notice(__('Payment failed. Please try again.', 'pinelabs-pinepg-gateway'), 'error');
         
                         // Update order status to failed
                         $order = new WC_Order($actual_order_id);
                         $order->update_status('failed', 'Payment failed via Edge by Pine Labs.');
-                        $order->add_order_note(__('Payment failed via Edge by Pine Labs. Please try again. Edge order id: ' . $order_id_from_pg.' and woocommerce order id :' . $actual_order_id, 'woocommerce'));
+                        $completeText = 'Payment failed via Edge by Pine Labs. Please try again. Edge order id: ' . $order_id_from_pg . ' and WooCommerce order id: ' . $actual_order_id;
+                        $order->add_order_note($completeText);
 
         
                         // Redirect to cart
@@ -383,7 +392,7 @@ function pinepg_init_gateway_class() {
         
                         // Update order status
                         $order->payment_complete();
-                        $order->add_order_note(__('Payment success via Edge by Pine Labs.Status:'.$status.' Edge order id: ' . $order_id_from_pg.' and woocommerce order id :' . $actual_order_id, 'woocommerce'));
+                        $order->add_order_note('Payment success via Edge by Pine Labs.Status:'.$status.' Edge order id: ' . $order_id_from_pg.' and woocommerce order id :' . $actual_order_id);
                         
         
                         // Redirect to thank you page
@@ -393,14 +402,14 @@ function pinepg_init_gateway_class() {
                 } else {
                     // Handle case where cookie is not found
                     plugin_log(__LINE__ . ' Cookie not found for order ID: ' . $actual_order_id);
-                    wc_add_notice(__('Error processing payment. Cookie not found.', 'woocommerce'), 'error');
+                    wc_add_notice(__('Error processing payment. Cookie not found.', 'pinelabs-pinepg-gateway'), 'error');
                     wp_redirect(wc_get_cart_url());
                     exit;
                 }
             } else {
                 // Handle case where order ID is not provided
                 plugin_log(__LINE__ . ' Order ID not found in callback data.');
-                wc_add_notice(__('Error processing payment. Invalid order ID.', 'woocommerce'), 'error');
+                wc_add_notice(__('Error processing payment. Invalid order ID.', 'pinelabs-pinepg-gateway'), 'error');
                 wp_redirect(wc_get_cart_url());
                 exit;
             }
@@ -425,7 +434,7 @@ function pinepg_init_gateway_class() {
             ));
         
             if (is_wp_error($response)) {
-                error_log('Error calling external API: ' . $response->get_error_message());
+                //error_log('Error calling external API: ' . $response->get_error_message());
                 return; // Exit if there was an error
             }
         
@@ -437,15 +446,13 @@ function pinepg_init_gateway_class() {
                 $order_id = $response_data['data']['order_id'] ?? 'N/A'; // Use 'N/A' if not set
                 $status = $response_data['data']['status'] ?? 'N/A'; // Use 'N/A' if not set
         
-                // Print or log the order_id and status
-                error_log('Order ID: ' . $order_id);
-                error_log('Status: ' . $status);
+               
 
                 return array('order_id' => $order_id, 'status' => $status);
                 
                 
             } else {
-                error_log('Unexpected response structure: ' . print_r($response_data, true));
+                //error_log('Unexpected response structure: ' . print_r($response_data, true));
             }
         }
 
@@ -458,7 +465,7 @@ function pinepg_init_gateway_class() {
             : 'https://pluraluat.v2.pinepg.in/api/auth/v1/token';
 
                 // Prepare the request body
-                $body = json_encode(array(
+                $body = wp_json_encode(array(
                     'client_id' => $this->client_id,
                     'client_secret' => $this->client_secret,
                     'grant_type' => 'client_credentials',
@@ -474,7 +481,7 @@ function pinepg_init_gateway_class() {
                 ));
 
                 if (is_wp_error($response)) {
-                    error_log('Error retrieving access token: ' . $response->get_error_message());
+                    //error_log('Error retrieving access token: ' . $response->get_error_message());
                     return false;
                 }
 
@@ -486,7 +493,7 @@ function pinepg_init_gateway_class() {
                 if (isset($response_data['access_token'])) {
                     return $response_data['access_token'];
                 } else {
-                    error_log('Error retrieving access token: ' . print_r($response_data, true));
+                    //error_log('Error retrieving access token: ' . print_r($response_data, true));
                     return false;
                 }
             }
