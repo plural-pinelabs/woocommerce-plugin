@@ -170,6 +170,7 @@ function pinepg_init_gateway_class() {
 
 
 
+
     // Method to send the refund request to PinePG
     public function send_pinepg_refund_request( $edge_order_id, $amount, $reason ) {
         $url = $this->environment === 'production'
@@ -289,7 +290,7 @@ function pinepg_init_gateway_class() {
                         'email_id' => $order->get_billing_email(),
                         'first_name' => $order->get_billing_first_name(),
                         'last_name' => $order->get_billing_last_name(),
-                        'customer_id' => $order->get_customer_id(),
+                        //'customer_id' => $order->get_customer_id(),
                         'mobile_number' => $order->get_billing_phone(),
                     ),
                 ),
