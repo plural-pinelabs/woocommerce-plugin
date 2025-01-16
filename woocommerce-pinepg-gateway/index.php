@@ -262,6 +262,21 @@ function pinepg_init_gateway_class() {
             }
         }
 
+
+        public function getCallbackUrl() {
+            // Check if running on localhost
+            if (strpos($_SERVER['HTTP_HOST'], 'localhost') !== false) {
+                // Local environment
+                return 'http://localhost/wordpress/wc-api/WC_PinePg';
+            }
+        
+            // Production or staging environment
+            $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
+            $domain = $protocol . $_SERVER['HTTP_HOST'];
+            
+            return $domain . '/wc-api/WC_PinePg';
+        }
+
         public function send_pinepg_payment_request( $order ) {
             $url = $this->environment === 'production'
                 ? 'https://api.pluralpay.in/api/checkout/v1/orders'
@@ -270,12 +285,17 @@ function pinepg_init_gateway_class() {
 
                 
         $access_token = $this->get_access_token();
+
+        
+
         if (!$access_token) {
             return array(
                 'response_code' => 500,
                 'response_message' => 'Failed to retrieve access token',
             );
         }
+
+        $callback_url = $this->getCallbackUrl();
     
 
             $body = wp_json_encode( array(
@@ -284,6 +304,7 @@ function pinepg_init_gateway_class() {
                     'value' => (int) $order->get_total() * 100,
                     'currency' => 'INR',
                 ),
+                'callback_url' => $callback_url,
                 'pre_auth' => false,
                 'purchase_details' => array(
                     'customer' => array(
