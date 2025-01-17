@@ -384,13 +384,12 @@ function pinepg_init_gateway_class() {
                 // Check if the cookie exists
                 if (isset($_COOKIE[$cookie_name])) {
                     $token = sanitize_text_field(wp_unslash($_COOKIE[$cookie_name]));
-                    plugin_log(__LINE__ . ' Token from cookie: ' . $token);
+                   
         
                     // Call the API to get the status of the payment
                     $status_data = $this->call_enquiry_api($token);
         
-                    // Log the status data received from the API
-                    plugin_log(__LINE__ . ' Payment status data: ' . wp_json_encode($status_data));
+                    
         
                     // Check payment status
                     if ($status_data['status'] === 'FAILED') {
@@ -423,14 +422,14 @@ function pinepg_init_gateway_class() {
                     }
                 } else {
                     // Handle case where cookie is not found
-                    plugin_log(__LINE__ . ' Cookie not found for order ID: ' . $actual_order_id);
+                    
                     wc_add_notice(__('Error processing payment. Cookie not found.', 'pinelabs-pinepg-gateway'), 'error');
                     wp_redirect(wc_get_cart_url());
                     exit;
                 }
             } else {
                 // Handle case where order ID is not provided
-                plugin_log(__LINE__ . ' Order ID not found in callback data.');
+                
                 wc_add_notice(__('Error processing payment. Invalid order ID.', 'pinelabs-pinepg-gateway'), 'error');
                 wp_redirect(wc_get_cart_url());
                 exit;
