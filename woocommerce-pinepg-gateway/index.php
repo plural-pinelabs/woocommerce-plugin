@@ -141,7 +141,7 @@ function pinepg_init_gateway_class() {
 
                         // Add a note to the order
                         $order_note = sprintf(
-                            'Payment refund success via Edge by Pine Labs. Status: %s Edge order id: %s and WooCommerce order id: %d and refund id: %s and amount is %d',
+                            'Payment refund success via Edge by Pine Labs. Status: %s Pinelabs order id: %s and WooCommerce order id: %d and Pinelabs refund id: %s and amount is %d',
                             $refund_status,
                             $order_id,
                             $woocommerce_order_id,
@@ -392,7 +392,24 @@ function pinepg_init_gateway_class() {
                     
         
                     // Check payment status
-                    if ($status_data['status'] === 'FAILED') {
+                    if ($status_data['status'] === 'PROCESSED') {
+
+                         // Payment succeeded, complete the order
+                         $order = new WC_Order($actual_order_id);
+                         $status=$status_data['status'];
+         
+                         // Update order status
+                         $order->payment_complete();
+                         $order->add_order_note('Payment success via Edge by Pine Labs.Status:'.$status.' Pinelabs order id: ' . $order_id_from_pg.' and woocommerce order id :' . $actual_order_id);
+                         
+         
+                         // Redirect to thank you page
+                         wp_redirect($order->get_checkout_order_received_url());
+                         exit;
+
+                        
+                    } else {
+
                         // Payment failed, add an error notice
                         wc_add_notice(__('Payment failed. Please try again.', 'pinelabs-pinepg-gateway'), 'error');
         
@@ -402,23 +419,12 @@ function pinepg_init_gateway_class() {
                         $completeText = 'Payment failed via Edge by Pine Labs. Please try again. Edge order id: ' . $order_id_from_pg . ' and WooCommerce order id: ' . $actual_order_id;
                         $order->add_order_note($completeText);
 
+
         
                         // Redirect to cart
                         wp_redirect(wc_get_cart_url());
                         exit;
-                    } else {
-                        // Payment succeeded, complete the order
-                        $order = new WC_Order($actual_order_id);
-                        $status=$status_data['status'];
-        
-                        // Update order status
-                        $order->payment_complete();
-                        $order->add_order_note('Payment success via Edge by Pine Labs.Status:'.$status.' Edge order id: ' . $order_id_from_pg.' and woocommerce order id :' . $actual_order_id);
-                        
-        
-                        // Redirect to thank you page
-                        wp_redirect($order->get_checkout_order_received_url());
-                        exit;
+                       
                     }
                 } else {
                     // Handle case where cookie is not found
