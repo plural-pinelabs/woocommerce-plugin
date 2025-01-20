@@ -360,6 +360,8 @@ function pinepg_init_gateway_class() {
                     
                     // Process the order ID here
                 }
+
+                $status=$_POST['status'];
             
             
 
@@ -387,16 +389,15 @@ function pinepg_init_gateway_class() {
                    
         
                     // Call the API to get the status of the payment
-                    $status_data = $this->call_enquiry_api($token);
+                    // $status_data = $this->call_enquiry_api($token);
         
                     
         
                     // Check payment status
-                    if ($status_data['status'] === 'PROCESSED') {
+                    if ($status === 'PROCESSED') {
 
                          // Payment succeeded, complete the order
                          $order = new WC_Order($actual_order_id);
-                         $status=$status_data['status'];
          
                          // Update order status
                          $order->payment_complete();
