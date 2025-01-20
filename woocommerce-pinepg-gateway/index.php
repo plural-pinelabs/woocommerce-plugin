@@ -301,7 +301,7 @@ function pinepg_init_gateway_class() {
             $body = wp_json_encode( array(
                 'merchant_order_reference' => $order->get_order_number() . '_' . gmdate("ymdHis"),
                 'order_amount' => array(
-                    'value' => (int) $order->get_total() * 100,
+                    'value' => (int) round($order->get_total() * 100),
                     'currency' => 'INR',
                 ),
                 'callback_url' => $callback_url,
