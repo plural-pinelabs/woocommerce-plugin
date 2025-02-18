@@ -296,6 +296,12 @@ function pinepg_init_gateway_class() {
         }
 
         $callback_url = $this->getCallbackUrl();
+
+        $telephone=$order->get_billing_phone();
+        $onlyNumbers = preg_replace('/\D/', '', $telephone);
+		if (empty($onlyNumbers)) {
+			$onlyNumbers = '9999999999'; // Default value if empty
+		}
     
 
             $body = wp_json_encode( array(
@@ -312,7 +318,7 @@ function pinepg_init_gateway_class() {
                         'first_name' => $order->get_billing_first_name(),
                         'last_name' => $order->get_billing_last_name(),
                         //'customer_id' => $order->get_customer_id(),
-                        'mobile_number' => $order->get_billing_phone(),
+                        'mobile_number' => $onlyNumbers,
                     ),
                 ),
             ) );
@@ -389,7 +395,7 @@ function pinepg_init_gateway_class() {
                    
         
                     // Call the API to get the status of the payment
-                    // $status_data = $this->call_enquiry_api($token);
+                    $status = $this->call_enquiry_api($order_id_from_pg);
         
                     
         
@@ -448,41 +454,40 @@ function pinepg_init_gateway_class() {
         
 
 
-        private function call_enquiry_api($token) {
-
-            // Set the URL based on the environment
-           $url = $this->environment === 'production'
-            ? 'https://api.pluralonline.com/api/v3/checkout-bff/inquiry?token=' . $token
-            : 'https://api-staging.pluralonline.com/api/v3/checkout-bff/inquiry?token=' . $token;
+        private function call_enquiry_api($order_id_from_pg) { 
+            $url = $this->environment === 'production'
+                ? 'https://api.pluralpay.in/api/pay/v1/orders/' . $order_id_from_pg
+                : 'https://pluraluat.v2.pinepg.in/api/pay/v1/orders/' . $order_id_from_pg;
+        
+            $access_token = $this->get_access_token();
+            error_log('Access Token: ' . $access_token);
         
             $response = wp_remote_get($url, array(
                 'headers' => array(
+                    'Authorization' => 'Bearer ' . trim($access_token),
                     'Content-Type' => 'application/json',
-                ),
+                )
             ));
+
+            
         
             if (is_wp_error($response)) {
-                //error_log('Error calling external API: ' . $response->get_error_message());
-                return; // Exit if there was an error
+                error_log('API Error: ' . $response->get_error_message());
+                return;
             }
         
             $response_body = wp_remote_retrieve_body($response);
             $response_data = json_decode($response_body, true);
         
-            // Check if 'data' exists in the response
-            if (isset($response_data['data'])) {
-                $order_id = $response_data['data']['order_id'] ?? 'N/A'; // Use 'N/A' if not set
-                $status = $response_data['data']['status'] ?? 'N/A'; // Use 'N/A' if not set
+            error_log('API Response: ' . print_r($response_data, true));
         
-               
-
-                return array('order_id' => $order_id, 'status' => $status);
-                
-                
-            } else {
-                //error_log('Unexpected response structure: ' . print_r($response_data, true));
+            if (isset($response_data['data'])) {
+                return $response_data['data']['status'];
             }
+        
+            return null;
         }
+        
 
 
         // Function to retrieve the access token from the auth API
