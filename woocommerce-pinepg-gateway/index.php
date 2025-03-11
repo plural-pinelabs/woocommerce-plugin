@@ -277,81 +277,150 @@ function pinepg_init_gateway_class() {
             return $domain . '/wc-api/WC_PinePg';
         }
 
-        public function send_pinepg_payment_request( $order ) {
+        public function send_pinepg_payment_request($order)
+        {
             $url = $this->environment === 'production'
                 ? 'https://api.pluralpay.in/api/checkout/v1/orders'
                 : 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders';
-
-
-                
-        $access_token = $this->get_access_token();
-
         
-
-        if (!$access_token) {
-            return array(
-                'response_code' => 500,
-                'response_message' => 'Failed to retrieve access token',
-            );
-        }
-
-        $callback_url = $this->getCallbackUrl();
-
-        $telephone=$order->get_billing_phone();
-        $onlyNumbers = preg_replace('/\D/', '', $telephone);
-		if (empty($onlyNumbers)) {
-			$onlyNumbers = '9999999999'; // Default value if empty
-		}
-    
-
-            $body = wp_json_encode( array(
+            $access_token = $this->get_access_token();
+            if (!$access_token) {
+                return [
+                    'response_code' => 500,
+                    'response_message' => 'Failed to retrieve access token',
+                ];
+            }
+        
+            $callback_url = $this->getCallbackUrl();
+            $telephone = $order->get_billing_phone();
+            $onlyNumbers = preg_replace('/\D/', '', $telephone) ?: '9999999999';
+        
+            // Function to sanitize address fields
+            $sanitize_address = function ($address) {
+                return [
+                    'address1' => isset($address['address1']) ? substr($address['address1'], 0, 95) : '',
+                    'pincode' => $address['pincode'] ?? '',
+                    'city' => $address['city'] ?? '',
+                    'state' => $address['state'] ?? '',
+                    'country' => $address['country'] ?? '',
+                ];
+            };
+        
+            // Get billing and shipping addresses
+            $billing_address = [
+                'address1' => $order->get_billing_address_1(),
+                'pincode' => $order->get_billing_postcode(),
+                'city' => $order->get_billing_city(),
+                'state' => $order->get_billing_state(),
+                'country' => $order->get_billing_country(),
+            ];
+        
+            $shipping_address = [
+                'address1' => $order->get_shipping_address_1(),
+                'pincode' => $order->get_shipping_postcode(),
+                'city' => $order->get_shipping_city(),
+                'state' => $order->get_shipping_state(),
+                'country' => $order->get_shipping_country(),
+            ];
+        
+            // Check if shipping address is empty
+            if (empty($shipping_address['address1']) && empty($shipping_address['pincode'])) {
+                $shipping_address = $billing_address;
+            }
+        
+            // Check if billing address is empty
+            if (empty($billing_address['address1']) && empty($billing_address['pincode'])) {
+                $billing_address = $shipping_address;
+            }
+        
+            // Sanitize addresses
+            $billing_address = $sanitize_address($billing_address);
+            $shipping_address = $sanitize_address($shipping_address);
+        
+            // Get ordered products
+            $products = [];
+            foreach ($order->get_items() as $item) {
+                $product = $item->get_product();
+                $quantity = $item->get_quantity();
+                $product_price = (int) round($item->get_total() * 100 / $quantity);
+        
+                for ($i = 0; $i < $quantity; $i++) {
+                    $products[] = [
+                        'product_code' => $product->get_sku(),
+                        'product_amount' => [
+                            'value' => $product_price,
+                            'currency' => 'INR',
+                        ],
+                    ];
+                }
+            }
+        
+            // Get cart discount
+            $cart_discount = 0;
+            if (method_exists($order, 'get_total_discount')) {
+                $discount = $order->get_total_discount();
+                if (is_numeric($discount)) {
+                    $cart_discount = (int) round($discount * 100);
+                }
+            }
+        
+            // Prepare purchase details
+            $purchase_details = [
+                'customer' => [
+                    'email_id' => $order->get_billing_email(),
+                    'first_name' => $order->get_billing_first_name(),
+                    'last_name' => $order->get_billing_last_name(),
+                    'mobile_number' => $onlyNumbers,
+                    'billing_address' => $billing_address,
+                    'shipping_address' => $shipping_address,
+                ],
+                'products' => $products,
+            ];
+        
+            // Add cart discount if applicable
+            if ($cart_discount > 0) {
+                $purchase_details['cart_coupon_discount_amount'] = [
+                    'value' => $cart_discount,
+                    'currency' => 'INR',
+                ];
+            }
+        
+            // Prepare request body
+            $body = wp_json_encode([
                 'merchant_order_reference' => $order->get_order_number() . '_' . gmdate("ymdHis"),
-                'order_amount' => array(
+                'order_amount' => [
                     'value' => (int) round($order->get_total() * 100),
                     'currency' => 'INR',
-                ),
+                ],
                 'callback_url' => $callback_url,
                 'pre_auth' => false,
-                'purchase_details' => array(
-                    'customer' => array(
-                        'email_id' => $order->get_billing_email(),
-                        'first_name' => $order->get_billing_first_name(),
-                        'last_name' => $order->get_billing_last_name(),
-                        //'customer_id' => $order->get_customer_id(),
-                        'mobile_number' => $onlyNumbers,
-                    ),
-                ),
-            ) );
-
-           
-
-            $headers = array(
+                'purchase_details' => $purchase_details,
+            ]);
+        
+            // Set headers
+            $headers = [
                 'Merchant-ID' => $this->merchant_id,
                 'Content-Type' => 'application/json',
-            );
-           
-
-
-            if (!empty($access_token)) {
-                    $headers['Authorization'] = 'Bearer ' . $access_token;
-                }
-
-
-            $response = wp_remote_post( $url, array(
-                'method'    => 'POST',
-                'body'      => $body,
-                'headers'   => $headers,
-            ) );
-
-            if ( is_wp_error( $response ) ) {
-                return array(
+                'Authorization' => 'Bearer ' . $access_token,
+            ];
+        
+            // Send request
+            $response = wp_remote_post($url, [
+                'method' => 'POST',
+                'body' => $body,
+                'headers' => $headers,
+            ]);
+        
+            // Handle errors
+            if (is_wp_error($response)) {
+                return [
                     'response_code' => 500,
                     'response_message' => 'Internal Server Error',
-                );
+                ];
             }
-
-            $response_body = wp_remote_retrieve_body( $response );
-            return json_decode( $response_body, true );
+        
+            // Return decoded response
+            return json_decode(wp_remote_retrieve_body($response), true);
         }
 
         public function handle_pinepg_callback() {
