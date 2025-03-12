@@ -377,25 +377,28 @@ function pinepg_init_gateway_class() {
                 'products' => $products,
             ];
         
-            // Add cart discount if applicable
-            if ($cart_discount > 0) {
-                $purchase_details['cart_coupon_discount_amount'] = [
-                    'value' => $cart_discount,
-                    'currency' => 'INR',
-                ];
-            }
+                       // Prepare request body
+                       $body = [
+                        'merchant_order_reference' => $order->get_order_number() . '_' . gmdate("ymdHis"),
+                        'order_amount' => [
+                            'value' => (int) round($order->get_total() * 100),
+                            'currency' => 'INR',
+                        ],
+                        'callback_url' => $callback_url,
+                        'pre_auth' => false,
+                        'purchase_details' => $purchase_details,
+                    ];
         
-            // Prepare request body
-            $body = wp_json_encode([
-                'merchant_order_reference' => $order->get_order_number() . '_' . gmdate("ymdHis"),
-                'order_amount' => [
-                    'value' => (int) round($order->get_total() * 100),
-                    'currency' => 'INR',
-                ],
-                'callback_url' => $callback_url,
-                'pre_auth' => false,
-                'purchase_details' => $purchase_details,
-            ]);
+                    // Add cart discount if applicable
+                    if ($cart_discount > 0) {
+                        $body['cart_coupon_discount_amount'] = [
+                            'value' => (int) round($cart_discount * 100), // Ensure consistency in amount format
+                            'currency' => 'INR',
+                        ];
+                    }
+        
+                    // Encode the body after modifying the array
+                    $body = wp_json_encode($body);
         
             // Set headers
             $headers = [
