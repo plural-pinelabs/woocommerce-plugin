@@ -337,23 +337,37 @@ function pinepg_init_gateway_class() {
             $billing_address = $sanitize_address($billing_address);
             $shipping_address = $sanitize_address($shipping_address);
         
-            // Get ordered products
-            $products = [];
-            foreach ($order->get_items() as $item) {
-                $product = $item->get_product();
-                $quantity = $item->get_quantity();
-                $product_price = (int) round($item->get_total() * 100 / $quantity);
-        
-                for ($i = 0; $i < $quantity; $i++) {
-                    $products[] = [
-                        'product_code' => $product->get_sku(),
-                        'product_amount' => [
-                            'value' => $product_price,
-                            'currency' => 'INR',
-                        ],
-                    ];
-                }
-            }
+             // Get ordered products
+             $products = [];
+             $invalid_sku_found = false;
+             
+             foreach ($order->get_items() as $item) {
+                 $product = $item->get_product();
+                 $sku = $product->get_sku();
+             
+                 // If SKU is null or empty string, stop processing and clear $products
+                 if (empty($sku)) {
+                     $invalid_sku_found = true;
+                     break;
+                 }
+             
+                 $quantity = $item->get_quantity();
+                 $product_price = (int) round($item->get_total() * 100 / $quantity);
+             
+                 for ($i = 0; $i < $quantity; $i++) {
+                     $products[] = [
+                         'product_code' => $sku,
+                         'product_amount' => [
+                             'value' => $product_price,
+                             'currency' => 'INR',
+                         ],
+                     ];
+                 }
+             }
+             
+             if ($invalid_sku_found) {
+                 $products = []; // make sure it's reset after the loop
+             }
         
             // Get cart discount
             $cart_discount = 0;
@@ -373,9 +387,12 @@ function pinepg_init_gateway_class() {
                     'mobile_number' => $onlyNumbers,
                     'billing_address' => $billing_address,
                     'shipping_address' => $shipping_address,
-                ],
-                'products' => $products,
+                ]
             ];
+
+            if (!empty($products)) {
+                $purchase_details['products'] = $products;
+            }
         
                        // Prepare request body
                        $body = [
@@ -386,6 +403,11 @@ function pinepg_init_gateway_class() {
                         ],
                         'callback_url' => $callback_url,
                         'pre_auth' => false,
+                        'integration_mode'=> "REDIRECT",
+                        "plugin_data"=> [
+                            "plugin_type" => "WooCommerce",
+                            "plugin_version" => "V3"
+                        ],
                         'purchase_details' => $purchase_details,
                     ];
         
