@@ -10,6 +10,10 @@ Author: anoop.pandey@pinelabs.com
 Author URI: https://www.pinelabs.com/
 */
 
+if (!defined('PINEPG_LOG_DIR')) {
+    define('PINEPG_LOG_DIR', WP_CONTENT_DIR . '/pinepg-logs/');
+}
+
 add_filter( 'woocommerce_payment_gateways', 'pinepg_add_gateway_class' );
 function pinepg_add_gateway_class( $gateways ) {
     $gateways[] = 'WC_PinePg';
@@ -22,6 +26,21 @@ function pinepg_init_gateway_class() {
 
     load_plugin_textdomain('wc-edgepg', false, dirname( plugin_basename( __FILE__ ) ) . '/languages');
     class WC_PinePg extends WC_Payment_Gateway {
+
+
+        private function log_api_data($type, $data) {
+            // Ensure log directory exists
+            if (!file_exists(PINEPG_LOG_DIR)) {
+                wp_mkdir_p(PINEPG_LOG_DIR);
+            }
+            
+            $log_file = PINEPG_LOG_DIR . 'pinepg-' . date('Y-m-d') . '.log';
+            $timestamp = current_time('mysql');
+            $message = "[" . $timestamp . "] " . strtoupper($type) . ": " . print_r($data, true) . "\n";
+            
+            // Write to log file
+            file_put_contents($log_file, $message, FILE_APPEND | LOCK_EX);
+        }
 
         public function __construct() {
             $this->id = 'pinepg';
@@ -214,6 +233,7 @@ function pinepg_init_gateway_class() {
         }
     
         $response_body = wp_remote_retrieve_body( $response );
+        $this->log_api_data('refund_response', $response_body);
         return json_decode( $response_body, true );
     }
     
@@ -364,10 +384,64 @@ function pinepg_init_gateway_class() {
                      ];
                  }
              }
+
+
              
-             if ($invalid_sku_found) {
-                 $products = []; // make sure it's reset after the loop
-             }
+             // Get ordered products
+    $products = [];
+    $invalid_sku_found = false;
+    $totalProductPrice = 0;
+    
+    foreach ($order->get_items() as $item) {
+        $product = $item->get_product();
+        $sku = $product->get_sku();
+    
+        // If SKU is null or empty string, stop processing and clear $products
+        if (empty($sku)) {
+            $invalid_sku_found = true;
+            break;
+        }
+    
+        $quantity = $item->get_quantity();
+        $product_price = (int) round($item->get_total() * 100 / $quantity);
+        $totalProductPrice += $product_price * $quantity;
+    
+        for ($i = 0; $i < $quantity; $i++) {
+            $products[] = [
+                'product_code' => $sku,
+                'product_amount' => [
+                    'value' => $product_price,
+                    'currency' => 'INR',
+                ],
+            ];
+        }
+    }
+    
+    if ($invalid_sku_found) {
+        $products = []; // make sure it's reset after the loop
+    }
+
+    // Calculate order total in paise
+    $orderTotal = (int) round($order->get_total() * 100);
+    
+    // Special handling for shipping, discount, or other charges to show EMI
+    if (!empty($products) && ($orderTotal != $totalProductPrice)) {
+        $diffAmount = $orderTotal - $totalProductPrice;
+        
+        if ($diffAmount > 0) {
+            // Add the difference to the first product (additional charges)
+            $products[0]['product_amount']['value'] += $diffAmount;
+        } else {
+            // Subtract the difference from the first product (discounts)
+            $diffAmount = abs($diffAmount);
+            if ($products[0]['product_amount']['value'] >= $diffAmount) {
+                $products[0]['product_amount']['value'] -= $diffAmount;
+            }
+        }
+    }
+
+
+             
         
             // Get cart discount
             $cart_discount = 0;
@@ -421,6 +495,8 @@ function pinepg_init_gateway_class() {
         
                     // Encode the body after modifying the array
                     $body = wp_json_encode($body);
+
+                    $this->log_api_data('request', $body);
         
             // Set headers
             $headers = [
@@ -435,6 +511,8 @@ function pinepg_init_gateway_class() {
                 'body' => $body,
                 'headers' => $headers,
             ]);
+
+            $this->log_api_data('response', $response);
         
             // Handle errors
             if (is_wp_error($response)) {
@@ -490,6 +568,7 @@ function pinepg_init_gateway_class() {
         
                     // Call the API to get the status of the payment
                     $status = $this->call_enquiry_api($order_id_from_pg);
+
         
                     
         
