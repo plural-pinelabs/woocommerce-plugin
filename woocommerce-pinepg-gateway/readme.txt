@@ -1,64 +1,75 @@
-=== Pay Securely with Pine Labs ===
-Contributors: anooppandey
-Tags: WooCommerce, payment gateway, Pine Labs, Plural, secure payment
+=== Pay securely with Pine Labs Payment Gateway ===
+Contributors: pine-labs
+Tags: woocommerce, payment gateway, pine labs, checkout, secure payment
 Requires at least: 5.0
-Tested up to: 6.7
+Tested up to: 6.8.2
 Requires PHP: 7.4
-Tested up to PHP: 8.2
 Stable tag: 1.0.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-A WooCommerce payment gateway integration for Pine Labs, providing a seamless and secure checkout experience.
+Accept payments on your WooCommerce store using the Pay securely with Pine Labs Payment Gateway.
 
 == Description ==
 
-Pay Securely with Pine Labs is a payment gateway plugin for WooCommerce that integrates with Pine Labs to provide a reliable and secure payment experience. With features like real-time payment processing, refunds, and sandbox support, this plugin ensures smooth payment management for your online store.
+**Pay securely with Pine Labs Payment Gateway** allows you to accept online payments on your WooCommerce-powered store using Pine Labs’ secure payment infrastructure.
 
-**Features:**
-– Supports both Sandbox and Production environments.
-– Processes payments securely using Pine Labs' Plural API.
-– Enables refunds directly from WooCommerce.
-– Adds order notes for transaction tracking.
+Features:
+- 🛡️ Secure online payments
+- 💳 Supports multiple payment modes (Credit/Debit cards, UPI, Netbanking, Wallets, etc.)
+- ⚙️ Seamless integration with WooCommerce checkout
+- 🔄 Refund support
+- 🌐 Tested on latest WordPress and WooCommerce versions
 
-For more details, visit the [plugin documentation](https://github.com/plural-pinelabs/woocommerce-plugin/).
+== Installation ==
 
-== Installation == 
+1. Download the ZIP file from [GitHub Repository](https://github.com/plural-pinelabs/woocommerce-plugin).
+2. Log in to your WordPress admin dashboard.
+3. Navigate to **Plugins > Add New**.
+4. Click **Upload Plugin**, then **Choose File** and select the downloaded `woocommerce-pinepg-gateway.zip`.
+5. Click **Install Now** and then **Activate**.
+6. Go to **WooCommerce > Settings > Payments**.
+7. Enable **Pay securely with Pine Labs Payment Gateway** and configure your Merchant ID, credentials, and environment settings.
 
-1. Upload the plugin files to the `/wp-content/plugins/pay-securely-pine-labs` directory, or install the plugin through the WordPress plugins screen directly.
-2. Activate the plugin through the 'Plugins' screen in WordPress.
-3. Navigate to WooCommerce > Settings > Payments.
-4. Enable the "Pay Securely with Pine Labs" payment method and configure the required fields:
-   – Merchant ID
-   – Client ID
-   – Client Secret
-   – Return URL
-   – Environment (Sandbox/Production)
+| Field | Description |
+|-------|-------------|
+| **Enable PinePG Payment** | Enable/disable the payment gateway |
+| **Environment** | Choose between `Sandbox` and `Production` |
+| **Merchant ID** | Your Pine Labs Merchant ID |
+| **Client ID** | API Client ID provided by Pine Labs |
+| **Client Secret** | API Client Secret |
+| **Enable Down Payment** | Enable part-payment on checkout (optional) |
+
+Plugin path after installation:
+\wp-content\plugins\woocommerce-pinepg-gateway\index.php
+
 
 == Frequently Asked Questions ==
 
-= How do I test the payment gateway? =
-Set the environment to "Sandbox" in the plugin settings and use the provided test credentials from Pine Labs to simulate transactions.
+= What is the plugin used for? =
+This plugin integrates Pine Labs payment gateway with WooCommerce for accepting secure payments.
 
-= How do I process refunds? =
-Refunds can be initiated directly from the WooCommerce order details page. The plugin communicates with Pine Labs' API to process refunds in real-time.
-
-= Where can I find more documentation? =
-Visit the [GitHub repository](https://github.com/plural-pinelabs/woocommerce-plugin/) for detailed setup and usage instructions.
-
-== Screenshots ==
-
-1. **Payment Gateway Settings**: Configure Merchant ID, Client ID, and other credentials.
-2. **Checkout Page**: Customers can select "Pay Securely with Pine Labs" as their payment option.
-3. **Order Details**: View transaction details and initiate refunds.
+= Which WordPress and WooCommerce versions are supported? =
+- ✅ WordPress 6.8.2, 6.7.x, 6.6.x
+- ✅ WooCommerce 10.1.1, 10.0.x, 9.9.x
+- ✅ PHP 7.4.x,8.2.12, 8.1.x, 8.0.x
 
 == Changelog ==
 
 = 1.0.0 =
-* Initial release.
-* Supports payment and refund functionality.
+* Initial release of the plugin.
+* Supports payments and refunds via Pine Labs.
+* Compatible with latest WooCommerce and WordPress versions.
 
-== Upgrade Notice ==
+== Support ==
 
-= 1.0.0 =
-This is the initial version of the plugin. Ensure your WooCommerce version is up-to-date for compatibility.
+For queries, issues or support requests, please contact:
+
+📧 Email: [anoop.pandey@pinelabs.com](mailto:anoop.pandey@pinelabs.com)
+
+== Screenshots ==
+
+1. 🛍️ WooCommerce Payment Settings with Pine Labs option
+2. 💳 Checkout page with Pine Labs selected
+3. 🧾 Payment confirmation
+

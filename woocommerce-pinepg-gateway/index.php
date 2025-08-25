@@ -42,6 +42,11 @@ function pinepg_init_gateway_class() {
             file_put_contents($log_file, $message, FILE_APPEND | LOCK_EX);
         }
 
+  private function is_part_payment_enabled() {
+    return $this->get_option('enable_down_payment') === 'yes';
+}
+
+
         public function __construct() {
             $this->id = 'pinepg';
             $this->has_fields = true;
@@ -69,7 +74,6 @@ function pinepg_init_gateway_class() {
             $this->cookie = $this->get_option( 'cookie' );
             $this->client_id = $this->get_option( 'client_id' );
             $this->client_secret = $this->get_option( 'client_secret' );
-            $this->return_url = $this->get_option( 'return_url' );
             $this->environment = $this->get_option( 'environment' );
             $this->msg['message'] = "";
 			$this->msg['class'] = ""; 
@@ -82,50 +86,51 @@ function pinepg_init_gateway_class() {
         }
 
         public function init_form_fields() {
-            $this->form_fields = array(
-                'enabled' => array(
-                    'title'       => 'Enable/Disable',
-                    'label'       => 'Enable PinePG Payment',
-                    'type'        => 'checkbox',
-                    'default'     => 'yes',
-                ),
-                'environment' => array(
-                    'title'       => 'Environment',
-                    'type'        => 'select',
-                    'options'     => array(
-                        'sandbox'    => 'Sandbox',
-                        'production' => 'Production',
-                    ),
-                    'default'     => 'sandbox',
-                    'description' => 'Select the environment to use (Sandbox or Production)',
-                ),
-                'merchant_id' => array(
-                    'title'       => 'Merchant ID',
-                    'type'        => 'text',
-                    'default'     => '',
-                    'description' => 'Enter your PinePG Merchant ID',
-                ),
-                'client_id' => array(
-                    'title'       => 'Client ID',
-                    'type'        => 'text',
-                    'default'     => '',
-                    'description' => 'Enter your PinePG Client ID',
-                ),
-                'client_secret' => array(
-                    'title'       => 'Client Secret',
-                    'type'        => 'text',
-                    'default'     => '',
-                    'description' => 'Enter your PinePG Client Secret',
-                ),
-                'return_url' => array(
-                'title'       => 'Return URL',
-                'type'        => 'text',
-                'default'     => '',
-                'description' => 'Enter the URL to which customers will be redirected after payment',
-                )
+    $this->form_fields = array(
+        'enabled' => array(
+            'title'       => 'Enable/Disable',
+            'label'       => 'Enable PinePG Payment',
+            'type'        => 'checkbox',
+            'default'     => 'yes',
+        ),
+        'environment' => array(
+            'title'       => 'Environment',
+            'type'        => 'select',
+            'options'     => array(
+                'sandbox'    => 'Sandbox',
+                'production' => 'Production',
+            ),
+            'default'     => 'sandbox',
+            'description' => 'Select the environment to use (Sandbox or Production)',
+        ),
+        'merchant_id' => array(
+            'title'       => 'Merchant ID',
+            'type'        => 'text',
+            'default'     => '',
+            'description' => 'Enter your PinePG Merchant ID',
+        ),
+        'client_id' => array(
+            'title'       => 'Client ID',
+            'type'        => 'text',
+            'default'     => '',
+            'description' => 'Enter your PinePG Client ID',
+        ),
+        'client_secret' => array(
+            'title'       => 'Client Secret',
+            'type'        => 'text',
+            'default'     => '',
+            'description' => 'Enter your PinePG Client Secret',
+        ),
+        'enable_down_payment' => array(
+            'title'       => 'Enable Down Payment',
+            'label'       => 'Enable part payment on checkout',
+            'type'        => 'checkbox',
+            'default'     => 'no',
+            'description' => 'Check this to enable part payment option via Pine Labs.',
+        ),
+    );
+}
 
-            );
-        }
 
 
 
@@ -297,234 +302,228 @@ function pinepg_init_gateway_class() {
             return $domain . '/wc-api/WC_PinePg';
         }
 
+
+       
+
+
+
         public function send_pinepg_payment_request($order)
-        {
-            $url = $this->environment === 'production'
-                ? 'https://api.pluralpay.in/api/checkout/v1/orders'
-                : 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders';
-        
-            $access_token = $this->get_access_token();
-            if (!$access_token) {
-                return [
-                    'response_code' => 500,
-                    'response_message' => 'Failed to retrieve access token',
-                ];
-            }
-        
-            $callback_url = $this->getCallbackUrl();
-            $telephone = $order->get_billing_phone();
-            $onlyNumbers = preg_replace('/\D/', '', $telephone) ?: '9999999999';
-        
-            // Function to sanitize address fields
-            $sanitize_address = function ($address) {
-                return [
-                    'address1' => isset($address['address1']) ? substr($address['address1'], 0, 95) : '',
-                    'pincode' => $address['pincode'] ?? '',
-                    'city' => $address['city'] ?? '',
-                    'state' => $address['state'] ?? '',
-                    'country' => $address['country'] ?? '',
-                ];
-            };
-        
-            // Get billing and shipping addresses
-            $billing_address = [
-                'address1' => $order->get_billing_address_1(),
-                'pincode' => $order->get_billing_postcode(),
-                'city' => $order->get_billing_city(),
-                'state' => $order->get_billing_state(),
-                'country' => $order->get_billing_country(),
-            ];
-        
-            $shipping_address = [
-                'address1' => $order->get_shipping_address_1(),
-                'pincode' => $order->get_shipping_postcode(),
-                'city' => $order->get_shipping_city(),
-                'state' => $order->get_shipping_state(),
-                'country' => $order->get_shipping_country(),
-            ];
-        
-            // Check if shipping address is empty
-            if (empty($shipping_address['address1']) && empty($shipping_address['pincode'])) {
-                $shipping_address = $billing_address;
-            }
-        
-            // Check if billing address is empty
-            if (empty($billing_address['address1']) && empty($billing_address['pincode'])) {
-                $billing_address = $shipping_address;
-            }
-        
-            // Sanitize addresses
-            $billing_address = $sanitize_address($billing_address);
-            $shipping_address = $sanitize_address($shipping_address);
-        
-             // Get ordered products
-             $products = [];
-             $invalid_sku_found = false;
-             
-             foreach ($order->get_items() as $item) {
-                 $product = $item->get_product();
-                 $sku = $product->get_sku();
-             
-                 // If SKU is null or empty string, stop processing and clear $products
-                 if (empty($sku)) {
-                     $invalid_sku_found = true;
-                     break;
-                 }
-             
-                 $quantity = $item->get_quantity();
-                 $product_price = (int) round($item->get_total() * 100 / $quantity);
-             
-                 for ($i = 0; $i < $quantity; $i++) {
-                     $products[] = [
-                         'product_code' => $sku,
-                         'product_amount' => [
-                             'value' => $product_price,
-                             'currency' => 'INR',
-                         ],
-                     ];
-                 }
-             }
+{
+    $url = $this->environment === 'production'
+        ? 'https://api.pluralpay.in/api/checkout/v1/orders'
+        : 'https://pluraluat.v2.pinepg.in/api/checkout/v1/orders';
 
+    $access_token = $this->get_access_token();
+    if (!$access_token) {
+        return [
+            'response_code' => 500,
+            'response_message' => 'Failed to retrieve access token',
+        ];
+    }
 
-             
-             // Get ordered products
+    $callback_url = $this->getCallbackUrl();
+    $telephone = $order->get_billing_phone();
+    $onlyNumbers = preg_replace('/\D/', '', $telephone) ?: '9999999999';
+
+    $billing_address_raw = [
+        'address1' => $order->get_billing_address_1(),
+        'pincode' => $order->get_billing_postcode(),
+        'city' => $order->get_billing_city(),
+        'state' => $order->get_billing_state(),
+        'country' => $order->get_billing_country(),
+    ];
+
+    $shipping_address_raw = [
+        'address1' => $order->get_shipping_address_1(),
+        'pincode' => $order->get_shipping_postcode(),
+        'city' => $order->get_shipping_city(),
+        'state' => $order->get_shipping_state(),
+        'country' => $order->get_shipping_country(),
+    ];
+
+    // Use whichever address is available
+    $billing_address = array_filter($billing_address_raw) ?: $shipping_address_raw;
+    $shipping_address = array_filter($shipping_address_raw) ?: $billing_address_raw;
+
+    $sanitize_address = function ($address) {
+        return [
+            'address1' => isset($address['address1']) ? substr($address['address1'], 0, 95) : '',
+            'pincode'  => $address['pincode'] ?? '',
+            'city'     => $address['city'] ?? '',
+            'state'    => $address['state'] ?? '',
+            'country'  => $address['country'] ?? '',
+        ];
+    };
+
+    $billing_address = $sanitize_address($billing_address);
+    $shipping_address = $sanitize_address($shipping_address);
+
+    $grand_total_paise = (int) round($order->get_total() * 100);
+    $shipping_amount_paise = (int) round($order->get_shipping_total() * 100);
+    $discount_total_paise = abs((int) round($order->get_discount_total() * 100));
+
     $products = [];
-    $invalid_sku_found = false;
-    $totalProductPrice = 0;
-    
+    $total_product_value = 0;
+    $total_item_price_incl_tax = 0;
+    $coupon_discount = $discount_total_paise / 100.0;
+
+    // Calculate total incl tax value
     foreach ($order->get_items() as $item) {
+        $qty = $item->get_quantity();
+        if ($qty <= 0) continue;
+
+        $item_total = floatval($item->get_total() + $item->get_total_tax());
+        $total_item_price_incl_tax += $item_total;
+    }
+
+    foreach ($order->get_items() as $item) {
+        $qty = $item->get_quantity();
+        if ($qty <= 0) continue;
+
         $product = $item->get_product();
+        if (!$product || !$product->exists()) continue;
+
+        $item_total = floatval($item->get_total() + $item->get_total_tax());
+        $item_discount = abs(floatval($item->get_subtotal() - $item->get_total()));
         $sku = $product->get_sku();
-    
-        // If SKU is null or empty string, stop processing and clear $products
+
         if (empty($sku)) {
-            $invalid_sku_found = true;
-            break;
+            $sku = 'ITEM_' . $item->get_id() . '_' . rand(10000, 99999);
         }
-    
-        $quantity = $item->get_quantity();
-        $product_price = (int) round($item->get_total() * 100 / $quantity);
-        $totalProductPrice += $product_price * $quantity;
-    
-        for ($i = 0; $i < $quantity; $i++) {
+
+        $cart_discount_share = $total_item_price_incl_tax > 0
+            ? ($item_total / $total_item_price_incl_tax) * $coupon_discount
+            : 0;
+
+        $total_discount = $item_discount + $cart_discount_share;
+        $final_item_price = ($item_total - $total_discount) / $qty;
+        $final_item_price = max(0, $final_item_price);
+        $final_item_price_paise = (int) round($final_item_price * 100);
+
+        if ($final_item_price_paise <= 0) {
+            continue; // Skip 0-value products
+        }
+
+        for ($i = 0; $i < $qty; $i++) {
             $products[] = [
                 'product_code' => $sku,
                 'product_amount' => [
-                    'value' => $product_price,
+                    'value' => $final_item_price_paise,
                     'currency' => 'INR',
                 ],
             ];
-        }
-    }
-    
-    if ($invalid_sku_found) {
-        $products = []; // make sure it's reset after the loop
-    }
-
-    // Calculate order total in paise
-    $orderTotal = (int) round($order->get_total() * 100);
-    
-    // Special handling for shipping, discount, or other charges to show EMI
-    if (!empty($products) && ($orderTotal != $totalProductPrice)) {
-        $diffAmount = $orderTotal - $totalProductPrice;
-        
-        if ($diffAmount > 0) {
-            // Add the difference to the first product (additional charges)
-            $products[0]['product_amount']['value'] += $diffAmount;
-        } else {
-            // Subtract the difference from the first product (discounts)
-            $diffAmount = abs($diffAmount);
-            if ($products[0]['product_amount']['value'] >= $diffAmount) {
-                $products[0]['product_amount']['value'] -= $diffAmount;
-            }
+            $total_product_value += $final_item_price_paise;
         }
     }
 
+    // Add shipping as product
+    if ($shipping_amount_paise > 0) {
+        $products[] = [
+            'product_code' => 'shipping_charge',
+            'product_amount' => [
+                'value' => $shipping_amount_paise,
+                'currency' => 'INR',
+            ],
+        ];
+        $total_product_value += $shipping_amount_paise;
+    }
 
-             
-        
-            // Get cart discount
-            $cart_discount = 0;
-            if (method_exists($order, 'get_total_discount')) {
-                $discount = $order->get_total_discount();
-                if (is_numeric($discount)) {
-                    $cart_discount = (int) round($discount * 100);
-                }
-            }
-        
-            // Prepare purchase details
-            $purchase_details = [
-                'customer' => [
-                    'email_id' => $order->get_billing_email(),
-                    'first_name' => $order->get_billing_first_name(),
-                    'last_name' => $order->get_billing_last_name(),
-                    'mobile_number' => $onlyNumbers,
-                    'billing_address' => $billing_address,
-                    'shipping_address' => $shipping_address,
-                ]
-            ];
+    // Rounding adjustment
+    $rounding_adjustment = $grand_total_paise - $total_product_value;
+    if ($rounding_adjustment > 0) {
+        $products[] = [
+            'product_code' => 'rounding_adjustment',
+            'product_amount' => [
+                'value' => $rounding_adjustment,
+                'currency' => 'INR',
+            ],
+        ];
+        $total_product_value += $rounding_adjustment;
+    }
 
-            if (!empty($products)) {
-                $purchase_details['products'] = $products;
-            }
-        
-                       // Prepare request body
-                       $body = [
-                        'merchant_order_reference' => $order->get_order_number() . '_' . gmdate("ymdHis"),
-                        'order_amount' => [
-                            'value' => (int) round($order->get_total() * 100),
-                            'currency' => 'INR',
-                        ],
-                        'callback_url' => $callback_url,
-                        'pre_auth' => false,
-                        'integration_mode'=> "REDIRECT",
-                        "plugin_data"=> [
-                            "plugin_type" => "WooCommerce",
-                            "plugin_version" => "V3"
-                        ],
-                        'purchase_details' => $purchase_details,
-                    ];
-        
-                    // Add cart discount if applicable
-                    if ($cart_discount > 0) {
-                        $body['cart_coupon_discount_amount'] = [
-                            'value' => (int) round($cart_discount * 100), // Ensure consistency in amount format
-                            'currency' => 'INR',
-                        ];
-                    }
-        
-                    // Encode the body after modifying the array
-                    $body = wp_json_encode($body);
+    // Final mismatch check
+    if (abs($grand_total_paise - $total_product_value) > 1) {
+        $this->log_api_data('error', "Amount mismatch! Order total: $grand_total_paise, Product total: $total_product_value");
+        return [
+            'response_code' => 500,
+            'response_message' => 'Amount mismatch',
+        ];
+    }
 
-                    $this->log_api_data('request', $body);
-        
-            // Set headers
-            $headers = [
-                'Merchant-ID' => $this->merchant_id,
-                'Content-Type' => 'application/json',
-                'Authorization' => 'Bearer ' . $access_token,
-            ];
-        
-            // Send request
-            $response = wp_remote_post($url, [
-                'method' => 'POST',
-                'body' => $body,
-                'headers' => $headers,
-            ]);
-
-            $this->log_api_data('response', $response);
-        
-            // Handle errors
-            if (is_wp_error($response)) {
-                return [
-                    'response_code' => 500,
-                    'response_message' => 'Internal Server Error',
-                ];
-            }
-        
-            // Return decoded response
-            return json_decode(wp_remote_retrieve_body($response), true);
+    // Determine if virtual and no address
+    $all_virtual = true;
+    foreach ($order->get_items() as $item) {
+        $product = $item->get_product();
+        if ($product && !$product->is_virtual()) {
+            $all_virtual = false;
+            break;
         }
+    }
+
+    $customer = [
+        'email_id' => $order->get_billing_email(),
+        'first_name' => $order->get_billing_first_name(),
+        'last_name' => $order->get_billing_last_name(),
+        'mobile_number' => $onlyNumbers,
+    ];
+
+    if (!$all_virtual || !empty($billing_address['pincode'])) {
+        $customer['billing_address'] = $billing_address;
+        $customer['shipping_address'] = $shipping_address;
+    }
+
+    $payload = [
+        'merchant_order_reference' => $order->get_order_number() . '_' . gmdate("ymdHis"),
+        'order_amount' => [
+            'value' => $grand_total_paise,
+            'currency' => 'INR',
+        ],
+        'callback_url' => $callback_url,
+        'pre_auth' => false,
+        'integration_mode' => "REDIRECT",
+        "plugin_data" => [
+            "plugin_type" => "WooCommerce",
+            "plugin_version" => "V3"
+        ],
+        'purchase_details' => [
+            'customer' => $customer,
+            'products' => $products,
+        ],
+    ];
+
+    // Optional: part payment toggle
+    if ($this->is_part_payment_enabled()) {
+        $payload['part_payment'] = true;
+    }
+
+    $body = wp_json_encode($payload);
+
+    $this->log_api_data('request', $body);
+
+    $headers = [
+        'Merchant-ID' => $this->merchant_id,
+        'Content-Type' => 'application/json',
+        'Authorization' => 'Bearer ' . $access_token,
+    ];
+
+    $response = wp_remote_post($url, [
+        'method' => 'POST',
+        'body' => $body,
+        'headers' => $headers,
+    ]);
+
+    $this->log_api_data('response', $response);
+
+    if (is_wp_error($response)) {
+        return [
+            'response_code' => 500,
+            'response_message' => 'API error: ' . $response->get_error_message(),
+        ];
+    }
+
+    return json_decode(wp_remote_retrieve_body($response), true);
+}
+
 
         public function handle_pinepg_callback() {
             
