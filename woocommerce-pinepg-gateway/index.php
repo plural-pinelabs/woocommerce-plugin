@@ -83,6 +83,7 @@ function pinepg_init_gateway_class() {
 
             // Callback for payment verification
             add_action( 'woocommerce_api_wc_pinepg', array( $this, 'handle_pinepg_callback' ) );
+            add_action( 'woocommerce_api_wc_pinepg_webhook', array( $this, 'handle_pinepg_webhook' ) );
         }
 
         public function init_form_fields() {
@@ -303,6 +304,7 @@ function pinepg_init_gateway_class() {
         }
 
 
+
        
 
 
@@ -322,8 +324,31 @@ function pinepg_init_gateway_class() {
     }
 
     $callback_url = $this->getCallbackUrl();
-    $telephone = $order->get_billing_phone();
-    $onlyNumbers = preg_replace('/\D/', '', $telephone) ?: '9999999999';
+   $telephone = $order->get_billing_phone();
+// Remove all non-digit characters
+$onlyNumbers = preg_replace('/\D/', '', $telephone);
+
+// Process the phone number
+if (empty($onlyNumbers)) {
+    $onlyNumbers = '9999999999';
+} else {
+    // Remove country codes for India
+    $countryCodes = ['91', '+91'];
+    foreach ($countryCodes as $code) {
+        $cleanCode = preg_replace('/\D/', '', $code);
+        if (strpos($onlyNumbers, $cleanCode) === 0) {
+            $onlyNumbers = substr($onlyNumbers, strlen($cleanCode));
+            break;
+        }
+    }
+    
+    // Ensure we have exactly 10 digits
+    if (strlen($onlyNumbers) > 10) {
+        $onlyNumbers = substr($onlyNumbers, -10); // Take last 10 digits
+    } elseif (strlen($onlyNumbers) < 10) {
+        $onlyNumbers = '9999999999'; // Default if too short
+    }
+}
 
     $billing_address_raw = [
         'address1' => $order->get_billing_address_1(),
@@ -526,103 +551,112 @@ function pinepg_init_gateway_class() {
 
 
         public function handle_pinepg_callback() {
+    // Verify nonce before processing data
+    if (sanitize_text_field(wp_unslash(isset($_POST['order_id'])))) {
+        $order_id_from_pg = sanitize_text_field(wp_unslash($_POST['order_id']));
+        $status = isset($_POST['status']) ? sanitize_text_field(wp_unslash($_POST['status'])) : '';
+    } else {
+        wc_add_notice(__('Error processing payment. Invalid order ID.', 'pinelabs-pinepg-gateway'), 'error');
+        wp_redirect(wc_get_cart_url());
+        exit;
+    }
+
+    if ($order_id_from_pg != '') {
+        // Construct the cookie name
+        $cookie_name = 'woocommerce_' . $order_id_from_pg;
+        
+        // Get WooCommerce order ID from cookie
+        if (isset($_COOKIE[$cookie_name])) {
+            $woocommerce_order_id = sanitize_text_field(wp_unslash($_COOKIE[$cookie_name]));
+            $actual_order_id = (int)$woocommerce_order_id;
             
-        
-           
-                // Verify nonce before processing data
-                if (sanitize_text_field(wp_unslash(isset( $_POST['order_id'] )))) {
-                    
-                    // Sanitize the order_id
-                    $order_id_from_pg = sanitize_text_field( wp_unslash( $_POST['order_id'] ) );
-                    
-                    // Process the order ID here
-                }
-
-                $status=$_POST['status'];
+            $order = wc_get_order($actual_order_id);
             
-            
-
-            if ($order_id_from_pg != '') {
-                // Construct the cookie name
-                $cookie_name = 'order_' . $order_id_from_pg;
-                
-                
-                //get order 
-                $woocommerce_order_id = 'woocommerce_' . $order_id_from_pg;
-
-                if (isset($_COOKIE[$woocommerce_order_id])) {
-                    $woocommerce_order_id = sanitize_text_field(wp_unslash($_COOKIE[$woocommerce_order_id]));
-                    $parts = explode('_', $woocommerce_order_id);
-                    $actual_order_id = (int)$parts[0];
-                }
-
-                
-
-                
-        
-                // Check if the cookie exists
-                if (isset($_COOKIE[$cookie_name])) {
-                    $token = sanitize_text_field(wp_unslash($_COOKIE[$cookie_name]));
-                   
-        
-                    // Call the API to get the status of the payment
-                    $status = $this->call_enquiry_api($order_id_from_pg);
-
-        
-                    
-        
-                    // Check payment status
-                    if ($status === 'PROCESSED') {
-
-                         // Payment succeeded, complete the order
-                         $order = new WC_Order($actual_order_id);
-         
-                         // Update order status
-                         $order->payment_complete();
-                         $order->add_order_note('Payment success via Edge by Pine Labs.Status:'.$status.' Pinelabs order id: ' . $order_id_from_pg.' and woocommerce order id :' . $actual_order_id);
-                         
-         
-                         // Redirect to thank you page
-                         wp_redirect($order->get_checkout_order_received_url());
-                         exit;
-
-                        
-                    } else {
-
-                        // Payment failed, add an error notice
-                        wc_add_notice(__('Payment failed. Please try again.', 'pinelabs-pinepg-gateway'), 'error');
-        
-                        // Update order status to failed
-                        $order = new WC_Order($actual_order_id);
-                        $order->update_status('failed', 'Payment failed via Edge by Pine Labs.');
-                        $completeText = 'Payment failed via Edge by Pine Labs. Please try again. Edge order id: ' . $order_id_from_pg . ' and WooCommerce order id: ' . $actual_order_id;
-                        $order->add_order_note($completeText);
-
-
-        
-                        // Redirect to cart
-                        wp_redirect(wc_get_cart_url());
-                        exit;
-                       
-                    }
-                } else {
-                    // Handle case where cookie is not found
-                    
-                    wc_add_notice(__('Error processing payment. Cookie not found.', 'pinelabs-pinepg-gateway'), 'error');
-                    wp_redirect(wc_get_cart_url());
-                    exit;
-                }
-            } else {
-                // Handle case where order ID is not provided
-                
-                wc_add_notice(__('Error processing payment. Invalid order ID.', 'pinelabs-pinepg-gateway'), 'error');
+            if (!$order) {
+                wc_add_notice(__('Order not found.', 'pinelabs-pinepg-gateway'), 'error');
                 wp_redirect(wc_get_cart_url());
                 exit;
             }
-        
-            // End the function with a JSON success response for logging purposes (if needed)
-            wp_send_json_success();
+
+            $this->log_api_data('callback_processing', [
+                'pine_order_id' => $order_id_from_pg,
+                'woocommerce_order_id' => $actual_order_id,
+                'current_order_status' => $order->get_status(),
+                'callback_status' => $status
+            ]);
+
+            // Check if order is already paid (processed by webhook)
+            if ($order->is_paid()) {
+                $this->log_api_data('callback_order_already_paid', [
+                    'order_id' => $actual_order_id,
+                    'status' => $order->get_status()
+                ]);
+                
+                // Redirect to thank you page since order is already paid
+                wp_redirect($order->get_checkout_order_received_url());
+                exit;
+            }
+
+            // If order is not paid, check payment status
+            $api_status = $this->call_enquiry_api($order_id_from_pg);
+
+            $this->log_api_data('callback_api_status', [
+                'order_id' => $actual_order_id,
+                'api_status' => $api_status
+            ]);
+
+            // Check payment status
+            if ($api_status === 'PROCESSED') {
+                // Payment succeeded, complete the order
+                $order->payment_complete();
+                $order->add_order_note('Payment success via Edge by Pine Labs callback. Status: ' . $api_status . ' Pinelabs order id: ' . $order_id_from_pg . ' and woocommerce order id: ' . $actual_order_id);
+                
+                $this->log_api_data('callback_payment_success', [
+                    'order_id' => $actual_order_id,
+                    'pine_order_id' => $order_id_from_pg
+                ]);
+
+                // Redirect to thank you page
+                wp_redirect($order->get_checkout_order_received_url());
+                exit;
+            } else {
+                // Payment failed, add an error notice
+                wc_add_notice(__('Payment failed. Please try again.', 'pinelabs-pinepg-gateway'), 'error');
+
+                // Update order status to failed
+                $order->update_status('failed', 'Payment failed via Edge by Pine Labs.');
+                $completeText = 'Payment failed via Edge by Pine Labs. Please try again. Edge order id: ' . $order_id_from_pg . ' and WooCommerce order id: ' . $actual_order_id;
+                $order->add_order_note($completeText);
+
+                $this->log_api_data('callback_payment_failed', [
+                    'order_id' => $actual_order_id,
+                    'pine_order_id' => $order_id_from_pg,
+                    'status' => $api_status
+                ]);
+
+                // Redirect to cart
+                wp_redirect(wc_get_cart_url());
+                exit;
+            }
+        } else {
+            // Handle case where cookie is not found
+            wc_add_notice(__('Error processing payment. Session expired.', 'pinelabs-pinepg-gateway'), 'error');
+            
+            $this->log_api_data('callback_cookie_missing', [
+                'pine_order_id' => $order_id_from_pg,
+                'cookie_name' => $cookie_name
+            ]);
+            
+            wp_redirect(wc_get_cart_url());
+            exit;
         }
+    } else {
+        // Handle case where order ID is not provided
+        wc_add_notice(__('Error processing payment. Invalid order ID.', 'pinelabs-pinepg-gateway'), 'error');
+        wp_redirect(wc_get_cart_url());
+        exit;
+    }
+}
         
 
 
@@ -702,6 +736,334 @@ function pinepg_init_gateway_class() {
                     return false;
                 }
             }
+
+
+            public function handle_pinepg_webhook() {
+    // Get the raw input data
+    $raw_data = file_get_contents('php://input');
+    $headers = $this->get_all_headers();
+    
+    // Log webhook received
+    $this->log_api_data('webhook_received', [
+        'headers' => $headers,
+        'raw_data' => $raw_data,
+        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+    ]);
+    
+    try {
+        // Verify webhook signature first
+        $signature_verification = $this->verify_webhook_signature($headers, $raw_data);
+        if (!$signature_verification['valid']) {
+            $this->log_api_data('webhook_signature_failed', [
+                'error' => $signature_verification['error'],
+                'headers' => $headers
+            ]);
+            
+            wp_send_json_error('Invalid webhook signature', 401);
+            return;
+        }
+
+        $this->log_api_data('webhook_signature_success', 'Signature verified successfully');
+
+        $data = json_decode($raw_data, true);
+        
+        // Log webhook data
+        $this->log_api_data('webhook_data_decoded', ['data' => $data]);
+
+        if (($data['event_type'] ?? '') !== 'ORDER_PROCESSED') {
+            $this->log_api_data('webhook_non_processed_event', [
+                'event_type' => $data['event_type'] ?? 'UNKNOWN'
+            ]);
+            
+            wp_send_json_success('Webhook received but not processed (not ORDER_PROCESSED)');
+            return;
+        }
+
+        $order_id = $data['data']['order_id'] ?? null;
+        $status = $data['data']['status'] ?? null;
+        $merchant_order_reference = $data['data']['merchant_order_reference'] ?? null;
+
+        if (!$order_id || !$status || !$merchant_order_reference) {
+            $this->log_api_data('webhook_missing_fields', ['data' => $data]);
+            throw new Exception('Missing order_id, status or merchant_order_reference in webhook data');
+        }
+
+        $this->log_api_data('webhook_processing', [
+            'order_id' => $order_id,
+            'status' => $status,
+            'merchant_order_reference' => $merchant_order_reference
+        ]);
+
+        if ($status === 'PROCESSED') {
+            $this->process_successful_webhook($order_id, $status, $merchant_order_reference);
+        } else {
+            $this->log_api_data('webhook_non_processed_status', [
+                'order_id' => $order_id,
+                'status' => $status
+            ]);
+        }
+
+        $this->log_api_data('webhook_processing_completed', 'Webhook processed successfully');
+        wp_send_json_success('Webhook processed successfully');
+
+    } catch (Exception $e) {
+        $this->log_api_data('webhook_processing_failed', [
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString(),
+            'order_id' => $order_id ?? 'unknown',
+            'merchant_order_reference' => $merchant_order_reference ?? 'unknown'
+        ]);
+        
+        wp_send_json_error($e->getMessage(), 500);
+    }
+}
+
+
+private function verify_webhook_signature($headers, $raw_data) {
+    try {
+        // Convert all header keys to lowercase for consistent access
+        $headers = array_change_key_case($headers, CASE_LOWER);
+        
+        $webhook_id = $headers['webhook-id'] ?? '';
+        $webhook_timestamp = $headers['webhook-timestamp'] ?? '';
+        $webhook_signature = $headers['webhook-signature'] ?? '';
+
+        $this->log_api_data('webhook_signature_start', [
+            'webhook_id' => $webhook_id,
+            'webhook_timestamp' => $webhook_timestamp,
+            'webhook_signature' => $webhook_signature,
+            'body_length' => strlen($raw_data),
+            'all_headers' => $headers // Log all headers for debugging
+        ]);
+
+        // Check if required headers are present
+        if (empty($webhook_id) || empty($webhook_timestamp) || empty($webhook_signature)) {
+            throw new Exception('Missing required webhook headers: webhook-id, webhook-timestamp, webhook-signature');
+        }
+
+        // Rest of your existing signature verification code remains the same...
+        // Validate timestamp (prevent replay attacks)
+        $current_timestamp = time();
+        $timestamp = (int) $webhook_timestamp;
+        $max_age = 300; // 5 minutes in seconds
+
+        if ($timestamp < ($current_timestamp - $max_age)) {
+            throw new Exception('Webhook timestamp is too old');
+        }
+
+        if ($timestamp > ($current_timestamp + $max_age)) {
+            throw new Exception('Webhook timestamp is in the future');
+        }
+
+        // Continue with your existing signature verification logic...
+        $secret_key = $this->client_secret;
+        
+        if (empty($secret_key)) {
+            throw new Exception('Client secret is not configured in plugin settings');
+        }
+
+        $this->log_api_data('webhook_secret_retrieved', [
+            'secret_key_length' => strlen($secret_key),
+            'environment' => $this->environment
+        ]);
+
+        // Base64 encode the secret key as required by Pine Labs
+        $base64_secret = base64_encode($secret_key);
+        
+        $this->log_api_data('webhook_secret_prepared', [
+            'base64_secret_length' => strlen($base64_secret)
+        ]);
+
+        // Generate the signature to compare
+        $signed_content = $webhook_id . '.' . $webhook_timestamp . '.' . $raw_data;
+        
+        // Base64 decode the secret (as per Pine Labs documentation)
+        $secret_bytes = base64_decode($base64_secret);
+        
+        if ($secret_bytes === false) {
+            throw new Exception('Failed to base64 decode the secret key');
+        }
+
+        // Generate HMAC SHA-256 signature
+        $mac = hash_hmac('sha256', $signed_content, $secret_bytes, true);
+        $expected_signature = base64_encode($mac);
+        
+        $this->log_api_data('webhook_signature_generated', [
+            'signed_content_length' => strlen($signed_content),
+            'expected_signature' => $expected_signature
+        ]);
+
+        // Extract the actual signature from the header (remove 'v1,' prefix if present)
+        $actual_signature = str_replace('v1,', '', $webhook_signature);
+        
+        $this->log_api_data('webhook_signature_comparison', [
+            'expected' => $expected_signature,
+            'actual' => $actual_signature
+        ]);
+
+        // Use constant-time comparison to prevent timing attacks
+        $signature_valid = hash_equals($expected_signature, $actual_signature);
+        
+        if (!$signature_valid) {
+            throw new Exception('Signature mismatch - possible tampering detected');
+        }
+
+        $this->log_api_data('webhook_signature_valid', 'Signature validation successful');
+        
+        return [
+            'valid' => true,
+            'error' => null
+        ];
+
+    } catch (Exception $e) {
+        $this->log_api_data('webhook_signature_error', [
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+        
+        return [
+            'valid' => false,
+            'error' => $e->getMessage()
+        ];
+    }
+}
+
+
+/**
+ * Process successful webhook payment
+ */
+private function process_successful_webhook($pine_order_id, $status, $merchant_order_reference) {
+    // Extract WooCommerce order ID from merchant_order_reference
+    // Format: order_number_timestamp (e.g., 69_251104104402)
+    $parts = explode('_', $merchant_order_reference);
+    
+    if (count($parts) < 2) {
+        throw new Exception("Invalid merchant_order_reference format: " . $merchant_order_reference);
+    }
+    
+    $woocommerce_order_number = $parts[0] ?? null;
+    
+    if (!$woocommerce_order_number) {
+        throw new Exception("Could not extract WooCommerce order number from: " . $merchant_order_reference);
+    }
+
+    $this->log_api_data('webhook_order_extraction', [
+        'merchant_order_reference' => $merchant_order_reference,
+        'extracted_order_number' => $woocommerce_order_number,
+        'parts' => $parts
+    ]);
+
+    // Find order by order number
+    $query = new WC_Order_Query(array(
+        'limit' => 1,
+        'return' => 'ids',
+        'order_number' => $woocommerce_order_number,
+    ));
+    
+    $orders = $query->get_orders();
+    
+    if (empty($orders)) {
+        // Alternative: try to find by order ID directly
+        $order = wc_get_order($woocommerce_order_number);
+    } else {
+        $order_id = $orders[0];
+        $order = wc_get_order($order_id);
+    }
+    
+    if (!$order) {
+        throw new Exception("WooCommerce order not found for number: " . $woocommerce_order_number);
+    }
+
+    $woocommerce_order_id = $order->get_id();
+
+    $this->log_api_data('webhook_order_found', [
+        'woocommerce_order_id' => $woocommerce_order_id,
+        'order_number' => $woocommerce_order_number,
+        'order_status' => $order->get_status()
+    ]);
+
+    // Check if order is already paid
+    if ($order->is_paid()) {
+        $this->log_api_data('webhook_order_already_paid', [
+            'order_id' => $woocommerce_order_id,
+            'pine_order_id' => $pine_order_id
+        ]);
+        return;
+    }
+
+    // Update order status
+    $order->payment_complete();
+    
+    // Update pine labs order ID if not set
+    $current_pine_order_id = $order->get_meta('edge_order_id');
+    if (empty($current_pine_order_id)) {
+        $order->update_meta_data('edge_order_id', $pine_order_id);
+    }
+    
+    // Add order note
+    $order_note = sprintf(
+        'Payment confirmed via Pine Labs webhook. Status: %s. Pine Labs Order ID: %s. Merchant Reference: %s',
+        $status,
+        $pine_order_id,
+        $merchant_order_reference
+    );
+    
+    $order->add_order_note($order_note);
+    $order->save();
+
+     $cookie_name = 'woocommerce_' . $pine_order_id;
+    if (isset($_COOKIE[$cookie_name])) {
+        setcookie($cookie_name, '', time() - 3600, "/"); // Expire the cookie
+    }
+
+    $this->log_api_data('webhook_order_updated', [
+        'woocommerce_order_id' => $woocommerce_order_id,
+        'pine_order_id' => $pine_order_id,
+        'status' => $status,
+        'merchant_reference' => $merchant_order_reference,
+        'new_status' => $order->get_status()
+    ]);
+}
+
+
+/**
+ * Get all headers with proper case handling
+ */
+private function get_all_headers() {
+    $headers = [];
+    
+    // If getallheaders() is available, use it and normalize keys
+    if (function_exists('getallheaders')) {
+        $all_headers = getallheaders();
+        foreach ($all_headers as $key => $value) {
+            $headers[strtolower($key)] = $value;
+        }
+        return $headers;
+    }
+    
+    // Fallback: parse from $_SERVER
+    foreach ($_SERVER as $name => $value) {
+        if (substr($name, 0, 5) == 'HTTP_') {
+            $header_key = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($name, 5)))));
+            $headers[strtolower($header_key)] = $value;
+        }
+    }
+    
+    // Also check for specific headers that might not start with HTTP_
+    $special_headers = [
+        'CONTENT_TYPE' => 'content-type',
+        'CONTENT_LENGTH' => 'content-length',
+    ];
+    
+    foreach ($special_headers as $server_key => $header_key) {
+        if (isset($_SERVER[$server_key])) {
+            $headers[$header_key] = $_SERVER[$server_key];
+        }
+    }
+    
+    return $headers;
+}
+
 
     }
 }

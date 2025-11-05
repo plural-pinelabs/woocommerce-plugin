@@ -54,6 +54,11 @@ This plugin integrates Pine Labs payment gateway with WooCommerce for accepting 
 - ✅ WooCommerce 10.1.1, 10.0.x, 9.9.x
 - ✅ PHP 7.4.x,8.2.12, 8.1.x, 8.0.x
 
+
+
+= Want to set webhook? =
+- 🌐 Set webhook url - https://yourdomain.com/wc-api/wc_pinepg_webhook
+
 == Changelog ==
 
 = 1.0.0 =
