@@ -84,6 +84,7 @@ function pinepg_init_gateway_class() {
             // Callback for payment verification
             add_action( 'woocommerce_api_wc_pinepg', array( $this, 'handle_pinepg_callback' ) );
             add_action( 'woocommerce_api_wc_pinepg_webhook', array( $this, 'handle_pinepg_webhook' ) );
+            add_action('wp_footer', array($this, 'inject_pinelabs_script'));
         }
 
         public function init_form_fields() {
@@ -134,159 +135,219 @@ function pinepg_init_gateway_class() {
 
 
 
+// Implement the refund functionality
+public function process_refund( $order_id, $amount = null, $reason = '' ) {
+    $this->log_api_data('refund_start', [
+        'order_id' => $order_id,
+        'amount' => $amount,
+        'reason' => $reason
+    ]);
 
-        // Implement the refund functionality
-        public function process_refund( $order_id, $amount = null, $reason = '' ) {
-            $order = wc_get_order( $order_id );
-            $woocommerce_order_id = $order_id;
-        
-            // Retrieve the Edge order ID from the order metadata
-            $edge_order_id = $order->get_meta('edge_order_id');
-        
-            if ( empty( $edge_order_id ) ) {
-                return new WP_Error( 'error', 'Edge order ID not found for this order.' );
-            }
-        
-            // Call the refund API
-            $response = $this->send_pinepg_refund_request( $edge_order_id, $amount, $reason );
-           
+    $order = wc_get_order( $order_id );
+    $woocommerce_order_id = $order_id;
 
-            // Extract relevant data
-            $order_id = $response['data']['parent_order_id'];
-            $refund_id = $response['data']['order_id'];
-            $refund_status = $response['data']['status'];
-            $amount = $response['data']['order_amount']['value'];
-            $showAmount=$amount/100;
+    // Log order details
+    $this->log_api_data('refund_order_details', [
+        'order_id' => $order_id,
+        'order_status' => $order->get_status(),
+        'order_total' => $order->get_total(),
+        'payment_method' => $order->get_payment_method()
+    ]);
 
-            
-        
-            if ($refund_status === 'PROCESSED') {
-                      // Save refund ID in order metadata
-                        update_post_meta($woocommerce_order_id, '_refund_id', $refund_id);
-
-                        // Add a note to the order
-                        $order_note = sprintf(
-                            'Payment refund success via Edge by Pine Labs. Status: %s Pinelabs order id: %s and WooCommerce order id: %d and Pinelabs refund id: %s and amount is %d',
-                            $refund_status,
-                            $order_id,
-                            $woocommerce_order_id,
-                            $refund_id,
-                            $showAmount
-                        );
-                        
-                        // Get the WooCommerce order object
-                        $order = wc_get_order($woocommerce_order_id);
-                        
-                        // Add the note
-                        $order->add_order_note($order_note);
-
-                        // Optional: Mark the order as refunded
-                        $order->update_status('refunded');
-
-
-                        return 'Refund success: ' . $order_note;
-
-
-            } else {
-                return new WP_Error( 'error', 'Refund failed: ' . $response['message'] );
-            }
-        }
-        
-
-
-
-
-    // Method to send the refund request to PinePG
-    public function send_pinepg_refund_request( $edge_order_id, $amount, $reason ) {
-        $url = $this->environment === 'production'
-            ? 'https://api.pluralpay.in/api/pay/v1/refunds/' . $edge_order_id
-            : 'https://pluraluat.v2.pinepg.in/api/pay/v1/refunds/' . $edge_order_id;
+    // Retrieve the Edge order ID from the order metadata
+    $edge_order_id = $order->get_meta('edge_order_id');
     
-        $body = wp_json_encode( array(
-            'merchant_order_reference' => uniqid(),
-            'refund_amount' => array(
-                'value' => (int) $amount * 100, // Assuming WooCommerce amount is in decimal
-                'currency' => 'INR',
-            ),
-            'merchant_metadata' => array(
-                'key1' => 'DD',
-                'key_2' => 'XOF',
-            ),
-            'refund_reason' => $reason,
-        ) );
-    
-        $headers = array(
-            'Merchant-ID' => $this->merchant_id,
-            'Content-Type' => 'application/json',
-        );
-    
-        $access_token = $this->get_access_token();
-        if ( ! empty( $access_token ) ) {
-            $headers['Authorization'] = 'Bearer ' . $access_token;
-        }
-    
-        $response = wp_remote_post( $url, array(
-            'method'  => 'POST',
-            'body'    => $body,
-            'headers' => $headers,
-        ) );
-    
-        if ( is_wp_error( $response ) ) {
-            return array(
-                'response_code' => 500,
-                'response_message' => 'Internal Server Error',
-            );
-        }
-    
-        $response_body = wp_remote_retrieve_body( $response );
-        $this->log_api_data('refund_response', $response_body);
-        return json_decode( $response_body, true );
+    // Log all metadata to see what's stored
+    $all_meta = $order->get_meta_data();
+    $meta_data = [];
+    foreach ($all_meta as $meta) {
+        $meta_data[$meta->key] = $meta->value;
     }
     
+    $this->log_api_data('refund_metadata', [
+        'edge_order_id' => $edge_order_id,
+        'all_metadata' => $meta_data
+    ]);
+
+    if ( empty( $edge_order_id ) ) {
+        $this->log_api_data('refund_error', 'Edge order ID not found for this order');
+        return new WP_Error( 'error', 'Edge order ID not found for this order.' );
+    }
+
+    $this->log_api_data('refund_processing', [
+        'edge_order_id' => $edge_order_id,
+        'amount' => $amount
+    ]);
+
+    // Call the refund API
+    $response = $this->send_pinepg_refund_request( $edge_order_id, $amount, $reason );
+
+    $this->log_api_data('refund_api_response', $response);
+
+    // Extract relevant data
+    if (isset($response['data'])) {
+        $order_id = $response['data']['parent_order_id'] ?? 'unknown';
+        $refund_id = $response['data']['order_id'] ?? 'unknown';
+        $refund_status = $response['data']['status'] ?? 'unknown';
+        $amount = $response['data']['order_amount']['value'] ?? 0;
+        $showAmount = $amount / 100;
+    } else {
+        $this->log_api_data('refund_api_error', 'No data in API response');
+        return new WP_Error( 'error', 'Refund failed: No response data from Pine Labs API' );
+    }
+
+    if ($refund_status === 'PROCESSED') {
+        // Save refund ID in order metadata
+        update_post_meta($woocommerce_order_id, '_refund_id', $refund_id);
+
+        // Add a note to the order
+        $order_note = sprintf(
+            'Payment refund success via Edge by Pine Labs. Status: %s Pinelabs order id: %s and WooCommerce order id: %d and Pinelabs refund id: %s and amount is %d',
+            $refund_status,
+            $order_id,
+            $woocommerce_order_id,
+            $refund_id,
+            $showAmount
+        );
+        
+        // Get the WooCommerce order object
+        $order = wc_get_order($woocommerce_order_id);
+        
+        // Add the note
+        $order->add_order_note($order_note);
+
+        // Optional: Mark the order as refunded
+        $order->update_status('refunded');
+
+        $this->log_api_data('refund_success', [
+            'order_id' => $woocommerce_order_id,
+            'refund_id' => $refund_id,
+            'amount' => $showAmount,
+            'status' => $refund_status
+        ]);
+
+        return 'Refund success: ' . $order_note;
+
+    } else {
+        $this->log_api_data('refund_failed', [
+            'refund_status' => $refund_status,
+            'error_message' => $response['message'] ?? 'Unknown error'
+        ]);
+        return new WP_Error( 'error', 'Refund failed: ' . ($response['message'] ?? 'Unknown error') );
+    }
+}
+
+// Method to send the refund request to PinePG
+public function send_pinepg_refund_request( $edge_order_id, $amount, $reason ) {
+    $this->log_api_data('refund_request_start', [
+        'edge_order_id' => $edge_order_id,
+        'amount' => $amount,
+        'reason' => $reason
+    ]);
+
+    $url = $this->environment === 'production'
+        ? 'https://api.pluralpay.in/api/pay/v1/refunds/' . $edge_order_id
+        : 'https://pluraluat.v2.pinepg.in/api/pay/v1/refunds/' . $edge_order_id;
+
+    $this->log_api_data('refund_request_url', $url);
+
+    $body = wp_json_encode( array(
+        'merchant_order_reference' => uniqid(),
+        'refund_amount' => array(
+            'value' => (int) $amount * 100, // Assuming WooCommerce amount is in decimal
+            'currency' => 'INR',
+        ),
+        'merchant_metadata' => array(
+            'key1' => 'DD',
+            'key_2' => 'XOF',
+        ),
+        'refund_reason' => $reason,
+    ) );
+
+    $this->log_api_data('refund_request_body', $body);
+
+    $headers = array(
+        'Merchant-ID' => $this->merchant_id,
+        'Content-Type' => 'application/json',
+    );
+
+    $access_token = $this->get_access_token();
+    if ( ! empty( $access_token ) ) {
+        $headers['Authorization'] = 'Bearer ' . $access_token;
+    } else {
+        $this->log_api_data('refund_token_error', 'No access token available');
+        return array(
+            'response_code' => 500,
+            'response_message' => 'Failed to get access token',
+        );
+    }
+
+    $this->log_api_data('refund_request_headers', $headers);
+
+    $response = wp_remote_post( $url, array(
+        'method'  => 'POST',
+        'body'    => $body,
+        'headers' => $headers,
+        'timeout' => 30,
+    ) );
+
+    if ( is_wp_error( $response ) ) {
+        $this->log_api_data('refund_request_wp_error', [
+            'error' => $response->get_error_message(),
+            'code' => $response->get_error_code()
+        ]);
+        return array(
+            'response_code' => 500,
+            'response_message' => 'Internal Server Error: ' . $response->get_error_message(),
+        );
+    }
+
+    $response_code = wp_remote_retrieve_response_code( $response );
+    $response_body = wp_remote_retrieve_body( $response );
+    
+    $this->log_api_data('refund_response_full', [
+        'response_code' => $response_code,
+        'response_body' => $response_body,
+        'response_headers' => wp_remote_retrieve_headers( $response )
+    ]);
+
+    $response_data = json_decode( $response_body, true );
+    $this->log_api_data('refund_response_decoded', $response_data);
+    
+    return $response_data;
+}
+    
 
 
-        public function process_payment( $order_id ) {
-            $order = wc_get_order( $order_id );
-            $response = $this->send_pinepg_payment_request( $order );
+       public function process_payment($order_id) {
+    $order = wc_get_order($order_id);
+    $response = $this->send_pinepg_payment_request($order);
 
+    if (isset($response['response_code']) && $response['response_code'] == 200) {
+        // Save the Edge order ID
+        $order_id_pg = $response['order_id'];
+        $order->update_meta_data('edge_order_id', $order_id_pg);
+        $order->save();
 
-            if ( isset( $response['response_code'] ) && $response['response_code'] == 200 ) {
-                // Set cookie with order ID as name and token as value
-                $order_id_pg=$response['order_id'];
+        // Store the redirect URL in session
+        WC()->session->set('pinepg_redirect_url', $response['redirect_url']);
+        WC()->session->set('pinepg_order_id', $order_id);
 
-                // Save the Edge order ID in the WooCommerce order metadata
-                $order->update_meta_data('edge_order_id', $order_id_pg);
-                $order->save();
-                // Save the Edge order ID in the WooCommerce order metadata
-
-                //this is for enquiry api token is save correspondant to pg order id
-                $cookie_name = 'order_' . $order_id_pg;
-                $cookie_value = $response['token'];
-                setcookie($cookie_name, $cookie_value, time() + (86400 * 30), "/");
-                //this is for enquiry api token is save correspondant to pg order id
-
-                //this is to update order status actual woocommerce orderid is save in cookies to update status after returning from pg
-                $cookie_name = 'woocommerce_' . $order_id_pg;
-                $cookie_value = $order_id;
-                setcookie($cookie_name, $cookie_value, time() + (86400 * 30), "/");
-                //this is to update order status actual woocommerce orderid is save in cookies to update status after returning from pg
-
-
-
-                //error_log('Cookie set: ' . $cookie_name . ' = ' . $cookie_value);
-                
-                return array(
-                    'result'   => 'success',
-                    'redirect' => $response['redirect_url'],
-                );
-            } else {
-                wc_add_notice( 'Payment error: ' . $response['message'], 'error' );
-                return array(
-                    'result'   => 'failure',
-                    'redirect' => '',
-                );
-            }
-        }
+        // Return the redirect URL in the response for immediate use
+        return array(
+            'result'   => 'success',
+            'redirect' => wc_get_checkout_url(), // Stay on checkout page
+            'pinepg_redirect_url' => $response['redirect_url'], // Add this line
+            'pinepg_order_id' => $order_id // Add this line
+        );
+    } else {
+        wc_add_notice('Payment error: ' . $response['message'], 'error');
+        return array(
+            'result'   => 'failure',
+            'redirect' => '',
+        );
+    }
+}
 
 
         public function getCallbackUrl() {
@@ -309,7 +370,7 @@ function pinepg_init_gateway_class() {
 
 
 
-        public function send_pinepg_payment_request($order)
+    public function send_pinepg_payment_request($order)
 {
     $url = $this->environment === 'production'
         ? 'https://api.pluralpay.in/api/checkout/v1/orders'
@@ -324,14 +385,11 @@ function pinepg_init_gateway_class() {
     }
 
     $callback_url = $this->getCallbackUrl();
-   $telephone = $order->get_billing_phone();
-// Remove all non-digit characters
-$onlyNumbers = preg_replace('/\D/', '', $telephone);
-
-// Process the phone number
-if (empty($onlyNumbers)) {
-    $onlyNumbers = '9999999999';
-} else {
+    
+    // Process phone number - remove hardcoded default
+    $telephone = $order->get_billing_phone();
+    $onlyNumbers = preg_replace('/\D/', '', $telephone);
+    
     // Remove country codes for India
     $countryCodes = ['91', '+91'];
     foreach ($countryCodes as $code) {
@@ -342,14 +400,14 @@ if (empty($onlyNumbers)) {
         }
     }
     
-    // Ensure we have exactly 10 digits
+    // Ensure we have exactly 10 digits, otherwise use empty (no hardcoded default)
     if (strlen($onlyNumbers) > 10) {
-        $onlyNumbers = substr($onlyNumbers, -10); // Take last 10 digits
+        $onlyNumbers = substr($onlyNumbers, -10);
     } elseif (strlen($onlyNumbers) < 10) {
-        $onlyNumbers = '9999999999'; // Default if too short
+        $onlyNumbers = ''; // Don't use hardcoded number
     }
-}
 
+    // Prepare addresses
     $billing_address_raw = [
         'address1' => $order->get_billing_address_1(),
         'pincode' => $order->get_billing_postcode(),
@@ -387,20 +445,8 @@ if (empty($onlyNumbers)) {
     $shipping_amount_paise = (int) round($order->get_shipping_total() * 100);
     $discount_total_paise = abs((int) round($order->get_discount_total() * 100));
 
-    $products = [];
-    $total_product_value = 0;
-    $total_item_price_incl_tax = 0;
-    $coupon_discount = $discount_total_paise / 100.0;
-
-    // Calculate total incl tax value
-    foreach ($order->get_items() as $item) {
-        $qty = $item->get_quantity();
-        if ($qty <= 0) continue;
-
-        $item_total = floatval($item->get_total() + $item->get_total_tax());
-        $total_item_price_incl_tax += $item_total;
-    }
-
+    // Calculate total value of all items before discounts (including tax)
+    $total_before_discount_paise = 0;
     foreach ($order->get_items() as $item) {
         $qty = $item->get_quantity();
         if ($qty <= 0) continue;
@@ -408,118 +454,189 @@ if (empty($onlyNumbers)) {
         $product = $item->get_product();
         if (!$product || !$product->exists()) continue;
 
-        $item_total = floatval($item->get_total() + $item->get_total_tax());
-        $item_discount = abs(floatval($item->get_subtotal() - $item->get_total()));
+        $item_total_before_discount = floatval($item->get_subtotal() + $item->get_subtotal_tax());
+        $total_before_discount_paise += (int) round($item_total_before_discount * 100);
+    }
+
+    // Add shipping to total before discount
+    $total_before_discount_paise += $shipping_amount_paise;
+
+    // Prepare products array with distributed discounts
+    $products = [];
+    $total_product_value = 0;
+
+    // Process regular items with distributed discounts
+    foreach ($order->get_items() as $item) {
+        $qty = $item->get_quantity();
+        if ($qty <= 0) continue;
+
+        $product = $item->get_product();
+        if (!$product || !$product->exists()) continue;
+
+        // Calculate item values
+        $item_total_before_discount = floatval($item->get_subtotal() + $item->get_subtotal_tax());
+        $item_total_after_discount = floatval($item->get_total() + $item->get_total_tax());
+        
+        // Calculate discount share for this item
+        $item_share_of_total = $item_total_before_discount * 100 / ($total_before_discount_paise / 100);
+        $item_discount_share_paise = (int) round($discount_total_paise * $item_share_of_total / 100);
+        
+        // Calculate final price per unit with distributed discount
+        $unit_price_before_discount = $item_total_before_discount / $qty;
+        $unit_discount_share = $item_discount_share_paise / 100 / $qty;
+        $unit_price_after_discount = $unit_price_before_discount - $unit_discount_share;
+        $unit_price_paise = (int) round($unit_price_after_discount * 100);
+
+        if ($unit_price_paise <= 0) continue;
+
         $sku = $product->get_sku();
-
         if (empty($sku)) {
-            $sku = 'ITEM_' . $item->get_id() . '_' . rand(10000, 99999);
+            $sku = 'ITEM_' . $item->get_id();
         }
 
-        $cart_discount_share = $total_item_price_incl_tax > 0
-            ? ($item_total / $total_item_price_incl_tax) * $coupon_discount
-            : 0;
-
-        $total_discount = $item_discount + $cart_discount_share;
-        $final_item_price = ($item_total - $total_discount) / $qty;
-        $final_item_price = max(0, $final_item_price);
-        $final_item_price_paise = (int) round($final_item_price * 100);
-
-        if ($final_item_price_paise <= 0) {
-            continue; // Skip 0-value products
-        }
-
+        // Add product for each quantity
         for ($i = 0; $i < $qty; $i++) {
             $products[] = [
-                'product_code' => $sku,
-                'product_amount' => [
-                    'value' => $final_item_price_paise,
-                    'currency' => 'INR',
-                ],
+                "product_code" => $sku,
+                "product_amount" => [
+                    "value" => $unit_price_paise,
+                    "currency" => "INR"
+                ]
             ];
-            $total_product_value += $final_item_price_paise;
+            $total_product_value += $unit_price_paise;
         }
     }
 
-    // Add shipping as product
+    // Add shipping as product if applicable (with its share of discount)
     if ($shipping_amount_paise > 0) {
+        $shipping_share_of_total = ($shipping_amount_paise / 100) / ($total_before_discount_paise / 100) * 100;
+        $shipping_discount_share_paise = (int) round($discount_total_paise * $shipping_share_of_total / 100);
+        $shipping_final_paise = $shipping_amount_paise - $shipping_discount_share_paise;
+
         $products[] = [
-            'product_code' => 'shipping_charge',
-            'product_amount' => [
-                'value' => $shipping_amount_paise,
-                'currency' => 'INR',
-            ],
+            "product_code" => "shipping_charge",
+            "product_amount" => [
+                "value" => $shipping_final_paise,
+                "currency" => "INR"
+            ]
         ];
-        $total_product_value += $shipping_amount_paise;
+        $total_product_value += $shipping_final_paise;
     }
 
-    // Rounding adjustment
+    // Check for rounding differences and add adjustment if needed
     $rounding_adjustment = $grand_total_paise - $total_product_value;
-    if ($rounding_adjustment > 0) {
+    if (abs($rounding_adjustment) > 0) {
         $products[] = [
-            'product_code' => 'rounding_adjustment',
-            'product_amount' => [
-                'value' => $rounding_adjustment,
-                'currency' => 'INR',
-            ],
+            "product_code" => "rounding_adjustment",
+            "product_amount" => [
+                "value" => $rounding_adjustment,
+                "currency" => "INR"
+            ]
         ];
         $total_product_value += $rounding_adjustment;
     }
 
-    // Final mismatch check
-    if (abs($grand_total_paise - $total_product_value) > 1) {
-        $this->log_api_data('error', "Amount mismatch! Order total: $grand_total_paise, Product total: $total_product_value");
-        return [
-            'response_code' => 500,
-            'response_message' => 'Amount mismatch',
+    // Prepare cart items with correct pricing
+    $cartItems = [];
+    foreach ($order->get_items() as $item) {
+        $qty = $item->get_quantity();
+        if ($qty <= 0) continue;
+
+        $product = $item->get_product();
+        if (!$product || !$product->exists()) continue;
+
+        // Calculate correct prices including tax
+        $item_total_before_discount = floatval($item->get_subtotal() + $item->get_subtotal_tax());
+        $item_total_after_discount = floatval($item->get_total() + $item->get_total_tax());
+        $unit_price_before_discount = $item_total_before_discount / $qty;
+        $unit_price_after_discount = $item_total_after_discount / $qty;
+
+        // Truncate item name to 100 characters
+        $item_name = $product->get_name();
+        if (strlen($item_name) > 100) {
+            $item_name = substr($item_name, 0, 97) . '...';
+        }
+
+        // Truncate description to 200 characters and remove HTML tags
+        $item_description = $product->get_short_description() ?: $product->get_name();
+        $item_description = wp_strip_all_tags($item_description); // Remove HTML tags
+        if (strlen($item_description) > 200) {
+            $item_description = substr($item_description, 0, 197) . '...';
+        }
+
+        $cartItems[] = [
+            "item_id" => (string) $item->get_id(),
+            "item_name" => $item_name,
+            "item_description" => $item_description,
+            "item_details_url" => $product->get_permalink(),
+            "item_image_url" => wp_get_attachment_url($product->get_image_id()) ?: '',
+            "item_original_unit_price" => strval($unit_price_before_discount)*100, // Price before discounts
+            "item_discounted_unit_price" => strval($unit_price_after_discount)*100, // Final price after discounts
+            "item_quantity" => strval($qty),
+            "item_currency" => "INR"
         ];
     }
 
-    // Determine if virtual and no address
-    $all_virtual = true;
-    foreach ($order->get_items() as $item) {
-        $product = $item->get_product();
-        if ($product && !$product->is_virtual()) {
-            $all_virtual = false;
-            break;
-        }
-    }
-
-    $customer = [
-        'email_id' => $order->get_billing_email(),
-        'first_name' => $order->get_billing_first_name(),
-        'last_name' => $order->get_billing_last_name(),
-        'mobile_number' => $onlyNumbers,
+    // Prepare customer data
+    $customer_data = [
+        "email_id" => $order->get_billing_email(),
+        "first_name" => $order->get_billing_first_name(),
+        "last_name" => $order->get_billing_last_name(),
+        "customer_id" => (string) ($order->get_customer_id() ?: "0"),
+        "is_edit_customer_details_allowed" => true
     ];
 
-    if (!$all_virtual || !empty($billing_address['pincode'])) {
-        $customer['billing_address'] = $billing_address;
-        $customer['shipping_address'] = $shipping_address;
+    // Add mobile number only if available
+    if (!empty($onlyNumbers)) {
+        $customer_data["mobile_number"] = $onlyNumbers;
     }
 
+    // Add addresses if available
+    if (!empty($billing_address['pincode'])) {
+        $customer_data['billing_address'] = $billing_address;
+        $customer_data['shipping_address'] = $shipping_address;
+    }
+
+    // Build the complete payload with Shopify structure
     $payload = [
-        'merchant_order_reference' => $order->get_order_number() . '_' . gmdate("ymdHis"),
-        'order_amount' => [
-            'value' => $grand_total_paise,
-            'currency' => 'INR',
+        "merchant_order_reference" => $order->get_order_number() . '_' . gmdate("ymdHis"),
+        "order_amount" => [
+            "value" => $grand_total_paise,
+            "currency" => "INR"
         ],
-        'callback_url' => $callback_url,
-        'pre_auth' => false,
-        'integration_mode' => "REDIRECT",
+        "callback_url" => $callback_url,
+        "integration_mode" => "IFRAME",
+        "pre_auth" => false,
         "plugin_data" => [
             "plugin_type" => "WooCommerce",
             "plugin_version" => "V3"
         ],
-        'purchase_details' => [
-            'customer' => $customer,
-            'products' => $products,
-        ],
+        "purchase_details" => [
+            "customer" => $customer_data,
+            "products" => $products,
+            "merchant_metadata" => [
+                "express_checkout_allowed_action" => "checkoutCollectAddress, checkoutCollectMobile"
+            ],
+            "cart_details" => [
+                "cart_items" => $cartItems
+            ]
+        ]
     ];
 
     // Optional: part payment toggle
     if ($this->is_part_payment_enabled()) {
         $payload['part_payment'] = true;
     }
+
+    // Log the calculated totals for debugging
+    $this->log_api_data('price_calculation', [
+        'order_total_paise' => $grand_total_paise,
+        'calculated_total_paise' => $total_product_value,
+        'discount_total_paise' => $discount_total_paise,
+        'difference' => $grand_total_paise - $total_product_value,
+        'item_count' => count($order->get_items()),
+        'product_count' => count($products)
+    ]);
 
     $body = wp_json_encode($payload);
 
@@ -550,114 +667,491 @@ if (empty($onlyNumbers)) {
 }
 
 
-        public function handle_pinepg_callback() {
-    // Verify nonce before processing data
-    if (sanitize_text_field(wp_unslash(isset($_POST['order_id'])))) {
-        $order_id_from_pg = sanitize_text_field(wp_unslash($_POST['order_id']));
-        $status = isset($_POST['status']) ? sanitize_text_field(wp_unslash($_POST['status'])) : '';
-    } else {
+       public function handle_pinepg_callback() {
+    // Get order_id and status from POST (iframe success) or from redirect flow
+    $order_id_from_pg = sanitize_text_field(wp_unslash($_POST['order_id'] ?? ''));
+    $status = sanitize_text_field(wp_unslash($_POST['status'] ?? ''));
+    
+    // If no POST data, try GET (redirect flow)
+    if (empty($order_id_from_pg)) {
+        $order_id_from_pg = sanitize_text_field(wp_unslash($_GET['order_id'] ?? ''));
+        $status = sanitize_text_field(wp_unslash($_GET['status'] ?? ''));
+    }
+
+    if (empty($order_id_from_pg)) {
         wc_add_notice(__('Error processing payment. Invalid order ID.', 'pinelabs-pinepg-gateway'), 'error');
         wp_redirect(wc_get_cart_url());
         exit;
     }
 
-    if ($order_id_from_pg != '') {
-        // Construct the cookie name
+    // Get WooCommerce order ID from session (iframe flow) or cookie (redirect flow)
+    $woocommerce_order_id = WC()->session->get('pinepg_order_id');
+    
+    if (empty($woocommerce_order_id)) {
+        // Fallback to cookie method for redirect flow
         $cookie_name = 'woocommerce_' . $order_id_from_pg;
-        
-        // Get WooCommerce order ID from cookie
         if (isset($_COOKIE[$cookie_name])) {
             $woocommerce_order_id = sanitize_text_field(wp_unslash($_COOKIE[$cookie_name]));
-            $actual_order_id = (int)$woocommerce_order_id;
-            
-            $order = wc_get_order($actual_order_id);
-            
-            if (!$order) {
-                wc_add_notice(__('Order not found.', 'pinelabs-pinepg-gateway'), 'error');
-                wp_redirect(wc_get_cart_url());
-                exit;
-            }
+        }
+    }
 
-            $this->log_api_data('callback_processing', [
-                'pine_order_id' => $order_id_from_pg,
-                'woocommerce_order_id' => $actual_order_id,
-                'current_order_status' => $order->get_status(),
-                'callback_status' => $status
-            ]);
+    $actual_order_id = (int)$woocommerce_order_id;
+    
+    if (!$actual_order_id) {
+        wc_add_notice(__('Order not found.', 'pinelabs-pinepg-gateway'), 'error');
+        wp_redirect(wc_get_cart_url());
+        exit;
+    }
 
-            // Check if order is already paid (processed by webhook)
-            if ($order->is_paid()) {
-                $this->log_api_data('callback_order_already_paid', [
-                    'order_id' => $actual_order_id,
-                    'status' => $order->get_status()
-                ]);
-                
-                // Redirect to thank you page since order is already paid
-                wp_redirect($order->get_checkout_order_received_url());
-                exit;
-            }
+    $order = wc_get_order($actual_order_id);
+    
+    if (!$order) {
+        wc_add_notice(__('Order not found.', 'pinelabs-pinepg-gateway'), 'error');
+        wp_redirect(wc_get_cart_url());
+        exit;
+    }
 
-            // If order is not paid, check payment status
-            $api_status = $this->call_enquiry_api($order_id_from_pg);
+    $this->log_api_data('callback_processing', [
+        'pine_order_id' => $order_id_from_pg,
+        'woocommerce_order_id' => $actual_order_id,
+        'current_order_status' => $order->get_status(),
+        'callback_status' => $status,
+        'source' => !empty($_POST['order_id']) ? 'iframe' : 'redirect'
+    ]);
 
-            $this->log_api_data('callback_api_status', [
-                'order_id' => $actual_order_id,
-                'api_status' => $api_status
-            ]);
+    // Check if order is already paid
+    if ($order->is_paid()) {
+        $this->log_api_data('callback_order_already_paid', [
+            'order_id' => $actual_order_id,
+            'status' => $order->get_status()
+        ]);
+        
+        // Clear session data
+        WC()->session->__unset('pinepg_redirect_url');
+        WC()->session->__unset('pinepg_order_id');
+        
+        wp_redirect($order->get_checkout_order_received_url());
+        exit;
+    }
 
-            // Check payment status
-            if ($api_status === 'PROCESSED') {
-                // Payment succeeded, complete the order
-                $order->payment_complete();
-                $order->add_order_note('Payment success via Edge by Pine Labs callback. Status: ' . $api_status . ' Pinelabs order id: ' . $order_id_from_pg . ' and woocommerce order id: ' . $actual_order_id);
-                
-                $this->log_api_data('callback_payment_success', [
-                    'order_id' => $actual_order_id,
-                    'pine_order_id' => $order_id_from_pg
-                ]);
+    // Verify payment status with Pine Labs API
+    $api_status = $this->call_enquiry_api($order_id_from_pg);
 
-                // Redirect to thank you page
-                wp_redirect($order->get_checkout_order_received_url());
-                exit;
-            } else {
-                // Payment failed, add an error notice
-                wc_add_notice(__('Payment failed. Please try again.', 'pinelabs-pinepg-gateway'), 'error');
+    $this->log_api_data('callback_api_status', [
+        'order_id' => $actual_order_id,
+        'api_status' => $api_status
+    ]);
 
-                // Update order status to failed
-                $order->update_status('failed', 'Payment failed via Edge by Pine Labs.');
-                $completeText = 'Payment failed via Edge by Pine Labs. Please try again. Edge order id: ' . $order_id_from_pg . ' and WooCommerce order id: ' . $actual_order_id;
-                $order->add_order_note($completeText);
+    // Check payment status
+    if ($api_status === 'PROCESSED') {
+        // Payment succeeded, complete the order
+        $order->payment_complete();
+        $order->add_order_note('Payment success via Edge by Pine Labs. Status: ' . $api_status . ' Pinelabs order id: ' . $order_id_from_pg . ' and woocommerce order id: ' . $actual_order_id);
+        
+        // ✅ EMPTY THE CART - Add this line
+        WC()->cart->empty_cart();
+        
+        // Clear session data
+        WC()->session->__unset('pinepg_redirect_url');
+        WC()->session->__unset('pinepg_order_id');
+        
+        $this->log_api_data('callback_payment_success', [
+            'order_id' => $actual_order_id,
+            'pine_order_id' => $order_id_from_pg,
+            'cart_emptied' => true
+        ]);
 
-                $this->log_api_data('callback_payment_failed', [
-                    'order_id' => $actual_order_id,
-                    'pine_order_id' => $order_id_from_pg,
-                    'status' => $api_status
-                ]);
-
-                // Redirect to cart
-                wp_redirect(wc_get_cart_url());
-                exit;
-            }
-        } else {
-            // Handle case where cookie is not found
-            wc_add_notice(__('Error processing payment. Session expired.', 'pinelabs-pinepg-gateway'), 'error');
-            
-            $this->log_api_data('callback_cookie_missing', [
-                'pine_order_id' => $order_id_from_pg,
-                'cookie_name' => $cookie_name
-            ]);
-            
-            wp_redirect(wc_get_cart_url());
+        // If this is an AJAX call from iframe, return success
+        if (wp_doing_ajax() || !empty($_POST['order_id'])) {
+            echo 'SUCCESS';
             exit;
         }
+        
+        // Redirect to thank you page for redirect flow
+        wp_redirect($order->get_checkout_order_received_url());
+        exit;
     } else {
-        // Handle case where order ID is not provided
-        wc_add_notice(__('Error processing payment. Invalid order ID.', 'pinelabs-pinepg-gateway'), 'error');
+        // Payment failed
+        wc_add_notice(__('Payment failed. Please try again.', 'pinelabs-pinepg-gateway'), 'error');
+        $order->update_status('failed', 'Payment failed via Edge by Pine Labs.');
+        $order->add_order_note('Payment failed via Edge by Pine Labs. Edge order id: ' . $order_id_from_pg);
+
+        $this->log_api_data('callback_payment_failed', [
+            'order_id' => $actual_order_id,
+            'pine_order_id' => $order_id_from_pg,
+            'status' => $api_status
+        ]);
+
         wp_redirect(wc_get_cart_url());
         exit;
     }
 }
+
+
+// Add this to your class
+public function __destruct() {
+    // Clean up session data if order is completed
+    if (is_order_received_page()) {
+        WC()->session->__unset('pinepg_redirect_url');
+        WC()->session->__unset('pinepg_order_id');
+    }
+}
+
+
+public function inject_pinelabs_script() {
+    if (!is_checkout()) {
+        return;
+    }
+    ?>
+    <style>
+        .pinepg-loader {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.95);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            flex-direction: column;
+        }
+        .pinepg-loader .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+        .pinepg-loader .loading-text {
+            font-size: 16px;
+            color: #333;
+            font-weight: bold;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .pinepg-payment-status {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 10000;
+            display: none;
+            min-width: 300px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        }
+        .pinepg-success {
+            background: #d4edda;
+            color: #155724;
+            border: 2px solid #c3e6cb;
+        }
+        .pinepg-failure {
+            background: #f8d7da;
+            color: #721c24;
+            border: 2px solid #f5c6cb;
+        }
+        .pinepg-status-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        .pinepg-status-message {
+            font-size: 18px;
+            margin-bottom: 20px;
+            line-height: 1.4;
+        }
+        .pinepg-status-button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: all 0.3s ease;
+        }
+        .pinepg-continue-btn {
+            background: #28a745;
+            color: white;
+        }
+        .pinepg-continue-btn:hover {
+            background: #218838;
+        }
+        .pinepg-retry-btn {
+            background: #007bff;
+            color: white;
+        }
+        .pinepg-retry-btn:hover {
+            background: #0056b3;
+        }
+        .pinepg-cart-btn {
+            background: #6c757d;
+            color: white;
+        }
+        .pinepg-cart-btn:hover {
+            background: #545b62;
+        }
+    </style>
+
+    <script src="https://checkout-staging.pluralonline.com/v3/web-sdk-checkout.js"></script>
+    <script>
+    // Loader functions
+    function showLoader(message = 'Processing payment...') {
+        const loader = document.getElementById('pinepg-loader');
+        const loadingText = document.getElementById('pinepg-loading-text');
+        loadingText.textContent = message;
+        loader.style.display = 'flex';
+    }
+
+    function hideLoader() {
+        const loader = document.getElementById('pinepg-loader');
+        loader.style.display = 'none';
+    }
+
+    // Payment status functions
+    function showPaymentStatus(isSuccess, message, orderId = null) {
+        const statusDiv = document.getElementById('pinepg-payment-status');
+        const statusIcon = document.getElementById('pinepg-status-icon');
+        const statusMessage = document.getElementById('pinepg-status-message');
+        const statusButtons = document.getElementById('pinepg-status-buttons');
         
+        // Set status type
+        statusDiv.className = isSuccess ? 'pinepg-payment-status pinepg-success' : 'pinepg-payment-status pinepg-failure';
+        
+        // Set icon
+        statusIcon.innerHTML = isSuccess ? '✅' : '❌';
+        
+        // Set message
+        statusMessage.innerHTML = message;
+        
+        // Set buttons
+        if (isSuccess) {
+            statusButtons.innerHTML = `
+                <button class="pinepg-status-button pinepg-continue-btn" onclick="redirectToThankYou('${orderId}')">
+                    Continue to Order Details
+                </button>
+            `;
+        } else {
+            statusButtons.innerHTML = `
+                <button class="pinepg-status-button pinepg-retry-btn" onclick="retryPayment()">
+                    Try Again
+                </button>
+                <button class="pinepg-status-button pinepg-cart-btn" onclick="redirectToCart()">
+                    Return to Cart
+                </button>
+            `;
+        }
+        
+        // Hide loader and show status
+        hideLoader();
+        statusDiv.style.display = 'block';
+    }
+
+    // Navigation functions
+    function redirectToThankYou(orderId) {
+        if (orderId && orderId !== '') {
+            window.location.href = '<?php echo esc_url(wc_get_checkout_url()); ?>?order-received=' + orderId + '&key=wc_order_' + orderId;
+        } else {
+            // Fallback to generic thank you page
+            window.location.href = '<?php echo esc_url(wc_get_checkout_url()); ?>';
+        }
+    }
+
+    function redirectToCart() {
+        window.location.href = '<?php echo esc_url(wc_get_cart_url()); ?>';
+    }
+
+    function retryPayment() {
+        // Hide status and reload page to restart payment process
+        document.getElementById('pinepg-payment-status').style.display = 'none';
+        window.location.reload();
+    }
+
+    // Main payment functions
+    function handleCheckout(redirectUrl, orderId) {
+        console.log('Opening Pine Labs iframe with URL:', redirectUrl);
+        
+        // Show loader before iframe opens
+        showLoader('Opening secure payment gateway...');
+        
+        const options = {
+            redirectUrl,
+            successHandler: async function (response) {
+                console.log('Payment successful:', response);
+                showLoader('Verifying payment...');
+                
+                try {
+                    // Mark order as successful in WordPress
+                    await markOrderAsSuccess(response, orderId);
+                } catch (error) {
+                    console.error('Error in success handler:', error);
+                    showPaymentStatus(false, 'Payment verification failed. Please contact support.');
+                }
+            },
+            failedHandler: async function (response) {
+                console.log('Payment failed:', response);
+                showPaymentStatus(false, 'Payment failed. Please try again with a different payment method.');
+            },
+        };
+
+        const plural = new Plural(options);
+        plural.open(options);
+    }
+
+    // Function to mark order as successful
+    async function markOrderAsSuccess(paymentResponse, orderId) {
+        try {
+            console.log('Marking order as successful...', paymentResponse);
+            showLoader('Finalizing payment...');
+            
+            const response = await fetch('<?php echo home_url("/wc-api/WC_PinePg"); ?>', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                    'order_id': paymentResponse.order_id,
+                    'status': 'PROCESSED'
+                })
+            });
+            
+            const result = await response.text();
+            console.log('Order status update response:', result);
+            
+            // Show success message
+            showPaymentStatus(
+                true, 
+                'Payment Successful!<br>Your order has been confirmed.',
+                orderId
+            );
+            
+        } catch (error) {
+            console.error('Error updating order status:', error);
+            showPaymentStatus(false, 'Payment completed but verification failed. Please contact support with your order details.');
+        }
+    }
+
+    jQuery(document).ready(function($) {
+        // Store the current order ID to handle retries
+        let currentOrderId = null;
+        
+        $(document).on('click', '#place_order', function(e) {
+            if ($('#payment_method_pinepg').is(':checked')) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                
+                console.log('Pine Labs payment selected, getting redirect URL...');
+                showLoader('Processing your order...');
+                
+                // Show loading state on button
+                var $button = $('#place_order');
+                var originalText = $button.text();
+                $button.prop('disabled', true).text('Processing...');
+                
+                // Get all form data
+                var formData = $('form.checkout').serialize();
+                
+                // Submit via AJAX but stay on same page
+                $.ajax({
+                    type: 'POST',
+                    url: wc_checkout_params.checkout_url,
+                    data: formData,
+                    dataType: 'json',
+                    success: function(response) {
+                        console.log('AJAX Response:', response);
+                        
+                        if (response.result === 'success') {
+                            console.log('Checkout processed successfully');
+                            
+                            // Method 1: Check if redirect URL is in the AJAX response (first click)
+                            if (response.pinepg_redirect_url && response.pinepg_order_id) {
+                                console.log('Using redirect URL from AJAX response');
+                                currentOrderId = response.pinepg_order_id;
+                                handleCheckout(response.pinepg_redirect_url, response.pinepg_order_id);
+                            } 
+                            // Method 2: Check if we have a stored order ID from previous attempt
+                            else if (currentOrderId) {
+                                console.log('Using stored order ID for retry:', currentOrderId);
+                                <?php 
+                                $redirect_url = WC()->session->get('pinepg_redirect_url');
+                                if ($redirect_url): ?>
+                                    var redirectUrl = "<?php echo esc_js($redirect_url); ?>";
+                                    console.log('Using redirect URL from session for retry');
+                                    handleCheckout(redirectUrl, currentOrderId);
+                                <?php else: ?>
+                                    console.log('No redirect URL found in session for retry');
+                                    showPaymentStatus(false, 'Unable to initialize payment. Please refresh the page and try again.');
+                                <?php endif; ?>
+                            }
+                            // Method 3: Check session data with delay (fallback)
+                            else {
+                                console.log('No redirect URL in AJAX response, checking session...');
+                                
+                                // Small delay to ensure session is properly set
+                                setTimeout(function() {
+                                    <?php 
+                                    $redirect_url = WC()->session->get('pinepg_redirect_url');
+                                    $order_id = WC()->session->get('pinepg_order_id');
+                                    if ($redirect_url && $order_id): ?>
+                                        var redirectUrl = "<?php echo esc_js($redirect_url); ?>";
+                                        var sessionOrderId = "<?php echo esc_js($order_id); ?>";
+                                        console.log('Using redirect URL from session after delay');
+                                        currentOrderId = sessionOrderId;
+                                        handleCheckout(redirectUrl, sessionOrderId);
+                                    <?php else: ?>
+                                        console.log('No redirect URL found in session after delay');
+                                        showPaymentStatus(false, 'Payment initialization failed. Please try again.');
+                                    <?php endif; ?>
+                                }, 300);
+                            }
+                        } else {
+                            console.log('Checkout failed in AJAX response');
+                            showPaymentStatus(false, 'Order processing failed: ' + (response.messages || 'Please try again.'));
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        console.log('AJAX error:', error);
+                        showPaymentStatus(false, 'Network error. Please check your connection and try again.');
+                    },
+                    complete: function() {
+                        $button.prop('disabled', false).text(originalText);
+                    }
+                });
+                
+                return false;
+            }
+        });
+        
+        // Handle page refresh/retry scenarios
+        $(document).on('pagehide beforeunload', function() {
+            // Clear stored data on page navigation
+            currentOrderId = null;
+        });
+    });
+    </script>
+
+    <!-- Loader HTML -->
+    <div id="pinepg-loader" class="pinepg-loader">
+        <div class="spinner"></div>
+        <div id="pinepg-loading-text" class="loading-text">Processing payment...</div>
+    </div>
+
+    <!-- Payment Status HTML -->
+    <div id="pinepg-payment-status" class="pinepg-payment-status">
+        <div id="pinepg-status-icon" class="pinepg-status-icon"></div>
+        <div id="pinepg-status-message" class="pinepg-status-message"></div>
+        <div id="pinepg-status-buttons" class="pinepg-status-buttons"></div>
+    </div>
+    <?php
+}
+
+
 
 
         private function call_enquiry_api($order_id_from_pg) { 
