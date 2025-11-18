@@ -75,7 +75,7 @@ Accept payments on your WooCommerce store using the Pay securely with Pine Labs 
 
 ### Webhook URL
 The plugin automatically handles webhooks at the following endpoint:
-https://yourdomain.com/wc-api/WC_PinePg_webhook/
+https://yourdomain.com/wc-api/wc_pinepg_webhook
 
 
 ### Setting up Webhooks in Pine Labs Dashboard
