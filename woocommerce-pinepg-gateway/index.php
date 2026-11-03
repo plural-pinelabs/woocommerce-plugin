@@ -138,58 +138,64 @@ function pinepg_init_gateway_class() {
         // Implement the refund functionality
         public function process_refund( $order_id, $amount = null, $reason = '' ) {
             $order = wc_get_order( $order_id );
-            $woocommerce_order_id = $order_id;
+
+            if ( ! $order ) {
+                return new WP_Error( 'pinepg_refund_error', 'WooCommerce order not found.' );
+            }
+
+            $amount = null === $amount ? (float) $order->get_total() : (float) $amount;
+            if ( $amount <= 0 ) {
+                return new WP_Error( 'pinepg_refund_error', 'Refund amount must be greater than zero.' );
+            }
         
             // Retrieve the Edge order ID from the order metadata
             $edge_order_id = $order->get_meta('edge_order_id');
         
             if ( empty( $edge_order_id ) ) {
-                return new WP_Error( 'error', 'Edge order ID not found for this order.' );
+                return new WP_Error( 'pinepg_refund_error', 'Edge order ID not found for this order.' );
             }
         
             // Call the refund API
             $response = $this->send_pinepg_refund_request( $edge_order_id, $amount, $reason );
-           
 
-            // Extract relevant data
-            $order_id = $response['data']['parent_order_id'];
-            $refund_id = $response['data']['order_id'];
-            $refund_status = $response['data']['status'];
-            $amount = $response['data']['order_amount']['value'];
-            $showAmount=$amount/100;
+            $response_data = isset( $response['data'] ) && is_array( $response['data'] )
+                ? $response['data']
+                : array();
+            $refund_status = isset( $response_data['status'] ) ? $response_data['status'] : '';
 
-            
-        
-            if ($refund_status === 'PROCESSED') {
-                      // Save refund ID in order metadata
-                        update_post_meta($woocommerce_order_id, '_refund_id', $refund_id);
+            if ( 'PROCESSED' !== $refund_status ) {
+                $error_message = isset( $response_data['message'] )
+                    ? $response_data['message']
+                    : ( isset( $response['response_message'] ) ? $response['response_message'] : 'Refund failed.' );
 
-                        // Add a note to the order
-                        $order_note = sprintf(
-                            'Payment refund success via Edge by Pine Labs. Status: %s Pinelabs order id: %s and WooCommerce order id: %d and Pinelabs refund id: %s and amount is %d',
-                            $refund_status,
-                            $order_id,
-                            $woocommerce_order_id,
-                            $refund_id,
-                            $showAmount
-                        );
-                        
-                        // Get the WooCommerce order object
-                        $order = wc_get_order($woocommerce_order_id);
-                        
-                        // Add the note
-                        $order->add_order_note($order_note);
-
-                        // Optional: Mark the order as refunded
-                        $order->update_status('refunded');
-
-
-                        return 'Refund success: ' . $order_note;
-
-
-            } else {
-                return new WP_Error( 'error', 'Refund failed: ' . $response['message'] );
+                return new WP_Error( 'pinepg_refund_error', 'Refund failed: ' . $error_message );
             }
+
+            $parent_order_id = isset( $response_data['parent_order_id'] )
+                ? $response_data['parent_order_id']
+                : $edge_order_id;
+            $refund_id = isset( $response_data['order_id'] ) ? $response_data['order_id'] : '';
+
+            if ( empty( $refund_id ) ) {
+                return new WP_Error( 'pinepg_refund_error', 'Refund was processed but the refund ID was not returned.' );
+            }
+
+            // Preserve every gateway refund ID when multiple partial refunds are processed.
+            $order->add_meta_data( '_refund_id', $refund_id, false );
+            $order->save();
+
+            $order_note = sprintf(
+                'Payment refund success via Pine Labs. Status: %s, Pine Labs order ID: %s, WooCommerce order ID: %d, Pine Labs refund ID: %s, amount: %s',
+                $refund_status,
+                $parent_order_id,
+                $order->get_id(),
+                $refund_id,
+                wc_format_decimal( $amount, wc_get_price_decimals() )
+            );
+            $order->add_order_note( $order_note );
+
+            // WooCommerce determines whether the refund is partial or full and updates the order status.
+            return true;
         }
         
 
@@ -204,8 +210,8 @@ function pinepg_init_gateway_class() {
     
         $body = wp_json_encode( array(
             'merchant_order_reference' => uniqid(),
-            'refund_amount' => array(
-                'value' => (int) $amount * 100, // Assuming WooCommerce amount is in decimal
+            'order_amount' => array(
+                'value' => (int) round( (float) $amount * 100 ),
                 'currency' => 'INR',
             ),
             'merchant_metadata' => array(
